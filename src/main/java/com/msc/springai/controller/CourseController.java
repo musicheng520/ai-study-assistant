@@ -7,6 +7,7 @@ import com.msc.springai.dto.course.CourseUpdateRequest;
 import com.msc.springai.entity.Course;
 import com.msc.springai.security.CurrentUserUtil;
 import com.msc.springai.service.CourseService;
+import com.msc.springai.service.DocumentService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +21,7 @@ import java.util.List;
 public class CourseController {
 
     private final CourseService courseService;
+    private final DocumentService documentService;
 
     @PostMapping
     public CourseResponse createCourse(@Valid @RequestBody CourseCreateRequest request) {
@@ -65,14 +67,16 @@ public class CourseController {
         Long currentUserId = CurrentUserUtil.getCurrentUserId();
         Course course = courseService.findByIdAndCheckOwner(courseId, currentUserId);
 
+        int documentCount = documentService.countCourseDocuments(currentUserId, courseId);
+
         return new CourseDashboardResponse(
                 course.getId(),
                 course.getName(),
+                documentCount,
                 0,
                 0,
                 0,
-                0,
-                "Dashboard API is ready. Document, chat, quiz and flashcard counts will be added later."
+                "Dashboard API is ready. Chat, quiz and flashcard counts will be added later."
         );
     }
 }

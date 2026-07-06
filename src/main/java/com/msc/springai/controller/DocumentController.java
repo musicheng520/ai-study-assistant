@@ -7,6 +7,7 @@ import com.msc.springai.security.CurrentUserUtil;
 import com.msc.springai.service.DocumentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -68,5 +69,23 @@ public class DocumentController {
                 document.getErrorMessage(),
                 document.getChunkCount()
         );
+    }
+
+    @DeleteMapping("/api/documents/{documentId}")
+    public ResponseEntity<Void> deleteDocument(@PathVariable Long documentId) {
+        Long currentUserId = CurrentUserUtil.getCurrentUserId();
+
+        documentService.deleteDocument(currentUserId, documentId);
+
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/api/documents/{documentId}/retry")
+    public DocumentResponse retryDocument(@PathVariable Long documentId) {
+        Long currentUserId = CurrentUserUtil.getCurrentUserId();
+
+        CourseDocument document = documentService.retryDocument(currentUserId, documentId);
+
+        return DocumentResponse.from(document);
     }
 }

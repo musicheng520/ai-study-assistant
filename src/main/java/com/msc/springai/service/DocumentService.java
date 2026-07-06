@@ -151,4 +151,48 @@ public class DocumentService {
 
         return documentType.trim().toUpperCase();
     }
+
+    public void deleteDocument(Long userId, Long documentId) {
+        CourseDocument document = findByIdAndCheckOwner(documentId, userId);
+
+        try {
+            Path storedPath = Path.of(document.getStoredFilePath());
+            Files.deleteIfExists(storedPath);
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Failed to delete stored file: " + ex.getMessage());
+        }
+
+        int rows = courseDocumentMapper.deleteByIdAndUserId(documentId, userId);
+
+        if (rows == 0) {
+            throw new IllegalArgumentException("Document delete failed");
+        }
+    }
+
+    public CourseDocument retryDocument(Long userId, Long documentId) {
+        CourseDocument document = findByIdAndCheckOwner(documentId, userId);
+
+        int rows = courseDocumentMapper.resetForRetry(documentId, userId);
+
+        if (rows == 0) {
+            throw new IllegalArgumentException("Document retry failed");
+        }
+
+        DocumentProcessingJob job = new DocumentProcessingJob();
+        job.setUserId(userId);
+        job.setCourseId(document.getCourseId());
+        job.setDocumentId(document.getId());
+        job.setStatus("QUEUED");
+        job.setStep("RETRY");
+        job.setRetryCount(0);
+
+        documentProcessingJobMapper.insert(job);
+
+        return courseDocumentMapper.findById(documentId);
+    }
+
+    public int countCourseDocuments(Long userId, Long courseId) {
+        courseService.findByIdAndCheckOwner(courseId, userId);
+        return courseDocumentMapper.countByCourseIdAndUserId(courseId, userId);
+    }
 }

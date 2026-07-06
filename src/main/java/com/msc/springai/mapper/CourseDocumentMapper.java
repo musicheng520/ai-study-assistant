@@ -41,4 +41,33 @@ public interface CourseDocumentMapper {
             """)
     List<CourseDocument> findByCourseIdAndUserId(@Param("courseId") Long courseId,
                                                  @Param("userId") Long userId);
+
+    @Delete("""
+        DELETE FROM documents
+        WHERE id = #{documentId}
+          AND user_id = #{userId}
+        """)
+    int deleteByIdAndUserId(@Param("documentId") Long documentId,
+                            @Param("userId") Long userId);
+
+    @Update("""
+        UPDATE documents
+        SET status = 'PROCESSING',
+            error_message = NULL,
+            chunk_count = 0,
+            processed_at = NULL
+        WHERE id = #{documentId}
+          AND user_id = #{userId}
+        """)
+    int resetForRetry(@Param("documentId") Long documentId,
+                      @Param("userId") Long userId);
+
+    @Select("""
+        SELECT COUNT(*)
+        FROM documents
+        WHERE course_id = #{courseId}
+          AND user_id = #{userId}
+        """)
+    int countByCourseIdAndUserId(@Param("courseId") Long courseId,
+                                 @Param("userId") Long userId);
 }
