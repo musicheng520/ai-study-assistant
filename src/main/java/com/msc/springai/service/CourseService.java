@@ -1,6 +1,7 @@
 package com.msc.springai.service;
 
 import com.msc.springai.dto.course.CourseCreateRequest;
+import com.msc.springai.dto.course.CourseUpdateRequest;
 import com.msc.springai.entity.Course;
 import com.msc.springai.mapper.CourseMapper;
 import lombok.RequiredArgsConstructor;
@@ -63,5 +64,32 @@ public class CourseService {
 
     public List<Course> findByUserId(Long userId) {
         return courseMapper.findByUserId(userId);
+    }
+
+    public Course updateCourse(Long courseId, Long userId, CourseUpdateRequest request) {
+        Course existingCourse = findByIdAndCheckOwner(courseId, userId);
+
+        existingCourse.setName(request.getName());
+        existingCourse.setCode(request.getCode());
+        existingCourse.setDescription(request.getDescription());
+        existingCourse.setColor(request.getColor() == null || request.getColor().isBlank()
+                ? existingCourse.getColor()
+                : request.getColor());
+
+        int rows = courseMapper.update(existingCourse);
+        if (rows == 0) {
+            throw new IllegalArgumentException("Course update failed");
+        }
+
+        return courseMapper.findById(courseId);
+    }
+
+    public void deleteCourse(Long courseId, Long userId) {
+        findByIdAndCheckOwner(courseId, userId);
+
+        int rows = courseMapper.deleteByIdAndUserId(courseId, userId);
+        if (rows == 0) {
+            throw new IllegalArgumentException("Course delete failed");
+        }
     }
 }

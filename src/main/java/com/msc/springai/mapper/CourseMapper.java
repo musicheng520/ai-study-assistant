@@ -36,4 +36,32 @@ public interface CourseMapper {
             WHERE user_id = #{userId}
             """)
     int countByUserId(Long userId);
+
+    @Update("""
+        UPDATE courses
+        SET name = #{name},
+            code = #{code},
+            description = #{description},
+            color = #{color}
+        WHERE id = #{id}
+          AND user_id = #{userId}
+        """)
+    int update(Course course);
+
+    @Delete("""
+        DELETE FROM courses
+        WHERE id = #{courseId}
+          AND user_id = #{userId}
+        """)
+    int deleteByIdAndUserId(@Param("courseId") Long courseId,
+                            @Param("userId") Long userId);
+
+    @Select("""
+        SELECT COUNT(*)
+        FROM courses
+        WHERE id = #{courseId}
+          AND user_id = #{userId}
+        """)
+    int existsByIdAndUserId(@Param("courseId") Long courseId,
+                            @Param("userId") Long userId);
 }
