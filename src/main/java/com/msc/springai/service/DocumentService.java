@@ -19,11 +19,12 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class DocumentService {
 
-    private static final long MAX_FILE_SIZE = 20L * 1024 * 1024;
+    private static final long MAX_FILE_SIZE = 40L * 1024 * 1024;
 
     private final CourseService courseService;
     private final CourseDocumentMapper courseDocumentMapper;
     private final DocumentProcessingJobMapper documentProcessingJobMapper;
+    private final DocumentProcessingService documentProcessingService;
 
     @Value("${app.file.upload-dir}")
     private String uploadDir;
@@ -82,6 +83,8 @@ public class DocumentService {
             job.setRetryCount(0);
 
             documentProcessingJobMapper.insert(job);
+
+            documentProcessingService.processDocumentAsync(job.getId(), document.getId());
 
             return courseDocumentMapper.findById(document.getId());
         } catch (Exception ex) {
@@ -187,6 +190,8 @@ public class DocumentService {
         job.setRetryCount(0);
 
         documentProcessingJobMapper.insert(job);
+
+        documentProcessingService.processDocumentAsync(job.getId(), documentId);
 
         return courseDocumentMapper.findById(documentId);
     }

@@ -1,9 +1,7 @@
 package com.msc.springai.mapper;
 
 import com.msc.springai.entity.DocumentProcessingJob;
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Options;
+import org.apache.ibatis.annotations.*;
 
 @Mapper
 public interface DocumentProcessingJobMapper {
@@ -18,4 +16,49 @@ public interface DocumentProcessingJobMapper {
             """)
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(DocumentProcessingJob job);
+
+    @Select("""
+            SELECT id, user_id, course_id, document_id, status, step,
+                   error_message, retry_count, started_at, completed_at, created_at
+            FROM document_processing_jobs
+            WHERE id = #{id}
+            """)
+    DocumentProcessingJob findById(Long id);
+
+    @Update("""
+            UPDATE document_processing_jobs
+            SET status = 'RUNNING',
+                step = #{step},
+                started_at = COALESCE(started_at, NOW())
+            WHERE id = #{jobId}
+            """)
+    int markRunning(@Param("jobId") Long jobId,
+                    @Param("step") String step);
+
+    @Update("""
+            UPDATE document_processing_jobs
+            SET step = #{step}
+            WHERE id = #{jobId}
+            """)
+    int updateStep(@Param("jobId") Long jobId,
+                   @Param("step") String step);
+
+    @Update("""
+            UPDATE document_processing_jobs
+            SET status = 'SUCCESS',
+                step = 'DONE',
+                completed_at = NOW()
+            WHERE id = #{jobId}
+            """)
+    int markSuccess(Long jobId);
+
+    @Update("""
+            UPDATE document_processing_jobs
+            SET status = 'FAILED',
+                error_message = #{errorMessage},
+                completed_at = NOW()
+            WHERE id = #{jobId}
+            """)
+    int markFailed(@Param("jobId") Long jobId,
+                   @Param("errorMessage") String errorMessage);
 }

@@ -70,4 +70,30 @@ public interface CourseDocumentMapper {
         """)
     int countByCourseIdAndUserId(@Param("courseId") Long courseId,
                                  @Param("userId") Long userId);
+
+    @Update("""
+        UPDATE documents
+        SET status = #{status},
+            error_message = #{errorMessage},
+            chunk_count = #{chunkCount},
+            processed_at = CASE WHEN #{status} = 'READY' THEN NOW() ELSE processed_at END
+        WHERE id = #{documentId}
+        """)
+    int updateProcessingResult(@Param("documentId") Long documentId,
+                               @Param("status") String status,
+                               @Param("errorMessage") String errorMessage,
+                               @Param("chunkCount") Integer chunkCount);
+
+    @Update("""
+        UPDATE documents
+        SET status = 'PROCESSING',
+            error_message = NULL,
+            processed_at = NULL,
+            chunk_count = 0
+        WHERE id = #{documentId}
+          AND user_id = #{userId}
+        """)
+    int markProcessing(@Param("documentId") Long documentId,
+                       @Param("userId") Long userId);
+
 }
