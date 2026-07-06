@@ -16,3 +16,8 @@ mybatis:
   type-aliases-package: com.msc.springai.aistudyassistant.entity
   configuration:
     map-underscore-to-camel-case: true
+
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+    expiration-ms: 86400000
