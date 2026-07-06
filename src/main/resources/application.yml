@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: ai-study-assistant
+  servlet:
+    multipart:
+      max-file-size: 40MB
+      max-request-size: 40MB
 
   datasource:
     url: jdbc:mysql://localhost:3306/ai_study_assistant?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC
@@ -21,3 +25,5 @@ app:
   jwt:
     secret: ${JWT_SECRET}
     expiration-ms: 86400000
+  file:
+    upload-dir: uploads/course-documents
