@@ -77,3 +77,42 @@ CREATE TABLE IF NOT EXISTS document_processing_jobs (
                                                             FOREIGN KEY (document_id) REFERENCES documents(id)
                                                                 ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS document_chunks (
+                                               id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                                               user_id BIGINT NOT NULL,
+                                               course_id BIGINT NOT NULL,
+                                               document_id BIGINT NOT NULL,
+                                               chunk_index INT NOT NULL,
+                                               content MEDIUMTEXT NOT NULL,
+                                               content_hash VARCHAR(64) NOT NULL,
+                                               page_number INT,
+                                               section_title VARCHAR(255),
+                                               token_count INT,
+                                               vector_key VARCHAR(255),
+                                               vector_status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+                                               embedding_model VARCHAR(100),
+                                               embedding_dimension INT,
+                                               created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                                               CONSTRAINT fk_chunks_user
+                                                   FOREIGN KEY (user_id) REFERENCES users(id)
+                                                       ON DELETE CASCADE,
+
+                                               CONSTRAINT fk_chunks_course
+                                                   FOREIGN KEY (course_id) REFERENCES courses(id)
+                                                       ON DELETE CASCADE,
+
+                                               CONSTRAINT fk_chunks_document
+                                                   FOREIGN KEY (document_id) REFERENCES documents(id)
+                                                       ON DELETE CASCADE
+);
+
+CREATE INDEX idx_chunks_document
+    ON document_chunks(document_id);
+
+CREATE INDEX idx_chunks_course_user
+    ON document_chunks(user_id, course_id);
+
+CREATE INDEX idx_chunks_vector_status
+    ON document_chunks(vector_status);

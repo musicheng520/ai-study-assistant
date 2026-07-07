@@ -3,6 +3,7 @@ package com.msc.springai.service;
 import com.msc.springai.entity.CourseDocument;
 import com.msc.springai.entity.DocumentProcessingJob;
 import com.msc.springai.mapper.CourseDocumentMapper;
+import com.msc.springai.mapper.DocumentChunkMapper;
 import com.msc.springai.mapper.DocumentProcessingJobMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +26,7 @@ public class DocumentService {
     private final CourseDocumentMapper courseDocumentMapper;
     private final DocumentProcessingJobMapper documentProcessingJobMapper;
     private final DocumentProcessingService documentProcessingService;
+    private final DocumentChunkMapper documentChunkMapper;
 
     @Value("${app.file.upload-dir}")
     private String uploadDir;
