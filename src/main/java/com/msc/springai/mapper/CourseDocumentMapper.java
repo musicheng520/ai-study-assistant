@@ -85,15 +85,52 @@ public interface CourseDocumentMapper {
                                @Param("chunkCount") Integer chunkCount);
 
     @Update("""
-        UPDATE documents
-        SET status = 'PROCESSING',
-            error_message = NULL,
-            processed_at = NULL,
-            chunk_count = 0
-        WHERE id = #{documentId}
-          AND user_id = #{userId}
-        """)
-    int markProcessing(@Param("documentId") Long documentId,
-                       @Param("userId") Long userId);
+    UPDATE documents
+    SET status = 'PROCESSING',
+        error_message = NULL,
+        total_pages = 0,
+        chunk_count = 0,
+        processed_at = NULL,
+        updated_at = NOW()
+    WHERE id = #{documentId}
+      AND user_id = #{userId}
+""")
+    int markProcessing(
+            @Param("documentId") Long documentId,
+            @Param("userId") Long userId
+    );
+
+    @Update("""
+    UPDATE documents
+    SET status = 'READY',
+        error_message = NULL,
+        total_pages = #{totalPages},
+        chunk_count = #{chunkCount},
+        processed_at = NOW(),
+        updated_at = NOW()
+    WHERE id = #{documentId}
+      AND user_id = #{userId}
+""")
+    int markReady(
+            @Param("documentId") Long documentId,
+            @Param("userId") Long userId,
+            @Param("totalPages") Integer totalPages,
+            @Param("chunkCount") Integer chunkCount
+    );
+
+    @Update("""
+    UPDATE documents
+    SET status = 'FAILED',
+        error_message = #{errorMessage},
+        processed_at = NOW(),
+        updated_at = NOW()
+    WHERE id = #{documentId}
+      AND user_id = #{userId}
+""")
+    int markFailed(
+            @Param("documentId") Long documentId,
+            @Param("userId") Long userId,
+            @Param("errorMessage") String errorMessage
+    );
 
 }

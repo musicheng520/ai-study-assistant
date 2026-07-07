@@ -26,39 +26,57 @@ public interface DocumentProcessingJobMapper {
     DocumentProcessingJob findById(Long id);
 
     @Update("""
-            UPDATE document_processing_jobs
-            SET status = 'RUNNING',
-                step = #{step},
-                started_at = COALESCE(started_at, NOW())
-            WHERE id = #{jobId}
-            """)
-    int markRunning(@Param("jobId") Long jobId,
-                    @Param("step") String step);
+    UPDATE document_processing_jobs
+    SET status = 'RUNNING',
+        step = #{step},
+        error_message = NULL,
+        started_at = IFNULL(started_at, NOW())
+    WHERE id = #{jobId}
+      AND user_id = #{userId}
+""")
+    int markRunning(
+            @Param("jobId") Long jobId,
+            @Param("userId") Long userId,
+            @Param("step") String step
+    );
 
     @Update("""
-            UPDATE document_processing_jobs
-            SET step = #{step}
-            WHERE id = #{jobId}
-            """)
-    int updateStep(@Param("jobId") Long jobId,
-                   @Param("step") String step);
+    UPDATE document_processing_jobs
+    SET step = #{step}
+    WHERE id = #{jobId}
+      AND user_id = #{userId}
+""")
+    int updateStep(
+            @Param("jobId") Long jobId,
+            @Param("userId") Long userId,
+            @Param("step") String step
+    );
 
     @Update("""
-            UPDATE document_processing_jobs
-            SET status = 'SUCCESS',
-                step = 'DONE',
-                completed_at = NOW()
-            WHERE id = #{jobId}
-            """)
-    int markSuccess(Long jobId);
+    UPDATE document_processing_jobs
+    SET status = 'SUCCESS',
+        step = 'DONE',
+        error_message = NULL,
+        completed_at = NOW()
+    WHERE id = #{jobId}
+      AND user_id = #{userId}
+""")
+    int markSuccess(
+            @Param("jobId") Long jobId,
+            @Param("userId") Long userId
+    );
 
     @Update("""
-            UPDATE document_processing_jobs
-            SET status = 'FAILED',
-                error_message = #{errorMessage},
-                completed_at = NOW()
-            WHERE id = #{jobId}
-            """)
-    int markFailed(@Param("jobId") Long jobId,
-                   @Param("errorMessage") String errorMessage);
+    UPDATE document_processing_jobs
+    SET status = 'FAILED',
+        error_message = #{errorMessage},
+        completed_at = NOW()
+    WHERE id = #{jobId}
+      AND user_id = #{userId}
+""")
+    int markFailed(
+            @Param("jobId") Long jobId,
+            @Param("userId") Long userId,
+            @Param("errorMessage") String errorMessage
+    );
 }

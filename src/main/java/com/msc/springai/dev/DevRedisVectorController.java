@@ -106,6 +106,41 @@ public class DevRedisVectorController {
         return response;
     }
 
+    @GetMapping("/api/dev/vector-search-document")
+    public Map<String, Object> searchDocument(
+            @RequestParam Long userId,
+            @RequestParam Long courseId,
+            @RequestParam Long documentId,
+            @RequestParam String question,
+            @RequestParam(defaultValue = "5") Integer topK
+    ) {
+        System.out.println("[DevRedisVectorController] Start document vector search test.");
+        System.out.println("[DevRedisVectorController] userId = " + userId);
+        System.out.println("[DevRedisVectorController] courseId = " + courseId);
+        System.out.println("[DevRedisVectorController] documentId = " + documentId);
+        System.out.println("[DevRedisVectorController] question = " + question);
+        System.out.println("[DevRedisVectorController] topK = " + topK);
+
+        float[] questionEmbedding = embeddingService.embed(question);
+
+        List<RedisChunkSearchResult> results = redisVectorService.searchDocumentChunks(
+                userId,
+                courseId,
+                documentId,
+                questionEmbedding,
+                topK
+        );
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("count", results.size());
+        response.put("results", results);
+
+        System.out.println("[DevRedisVectorController] Document vector search test finished.");
+        System.out.println("[DevRedisVectorController] result count = " + results.size());
+
+        return response;
+    }
+
     private String sha256(String text) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
