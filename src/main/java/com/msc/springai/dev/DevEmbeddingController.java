@@ -1,4 +1,4 @@
-package com.msc.springai.controller;
+package com.msc.springai.dev;
 
 import com.msc.springai.service.EmbeddingService;
 import lombok.RequiredArgsConstructor;
