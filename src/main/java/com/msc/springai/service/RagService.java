@@ -1,6 +1,7 @@
 package com.msc.springai.service;
 
 import com.msc.springai.dto.document.RedisChunkSearchResult;
+import com.msc.springai.dto.rag.CachedRagResult;
 import com.msc.springai.dto.rag.CitationResponse;
 import com.msc.springai.dto.rag.RagAskRequest;
 import com.msc.springai.dto.rag.RagAskResponse;
@@ -42,6 +43,7 @@ public class RagService {
     private final RedisVectorService redisVectorService;
     private final RagPromptBuilder ragPromptBuilder;
     private final CitationBuilder citationBuilder;
+    private final RagCacheService ragCacheService;
 
     private final ChatClient.Builder chatClientBuilder;
 
@@ -89,7 +91,6 @@ public class RagService {
         }
 
         System.out.println("[RagService] Course verified.");
-        System.out.println("[RagService] course name = " + course.getName());
 
         ChatSession session = getOrCreateSession(
                 userId,
@@ -108,6 +109,25 @@ public class RagService {
         );
 
         System.out.println("[RagService] userMessageId = " + userMessage.getId());
+
+        CachedRagResult cachedResult = ragCacheService.getCourseRagCache(
+                userId,
+                courseId,
+                question,
+                topK
+        );
+
+        if (cachedResult != null) {
+            return buildCachedResponse(
+                    session.getId(),
+                    userId,
+                    courseId,
+                    userMessage.getId(),
+                    cachedResult
+            );
+        }
+
+        System.out.println("[RagService] RAG cache miss. Continue normal RAG flow.");
 
         float[] questionEmbedding = embeddingService.embed(question);
 
@@ -137,6 +157,8 @@ public class RagService {
                     userId,
                     courseId,
                     userMessage.getId(),
+                    question,
+                    topK,
                     0
             );
         }
@@ -169,21 +191,29 @@ public class RagService {
         System.out.println("[RagService] assistantMessageId = "
                 + assistantMessage.getId());
 
-        if (!citationResponses.isEmpty()) {
-            List<ChatMessageCitation> citationEntities =
-                    citationBuilder.buildCitationEntities(
-                            assistantMessage.getId(),
-                            citationResponses
-                    );
-
-            int insertedCitationCount =
-                    chatMessageCitationMapper.insertBatch(citationEntities);
-
-            System.out.println("[RagService] Inserted citation count = "
-                    + insertedCitationCount);
-        }
+        saveCitationsIfPresent(
+                assistantMessage.getId(),
+                citationResponses,
+                false
+        );
 
         chatSessionMapper.touch(session.getId(), userId);
+
+        CachedRagResult resultToCache = new CachedRagResult(
+                answer,
+                noAnswer,
+                WORKFLOW_TYPE,
+                validChunks.size(),
+                citationResponses
+        );
+
+        ragCacheService.saveCourseRagCache(
+                userId,
+                courseId,
+                question,
+                topK,
+                resultToCache
+        );
 
         System.out.println("[RagService] Course RAG ask finished.");
         System.out.println("[RagService] noAnswer = " + noAnswer);
@@ -200,11 +230,60 @@ public class RagService {
         );
     }
 
+    private RagAskResponse buildCachedResponse(
+            Long sessionId,
+            Long userId,
+            Long courseId,
+            Long userMessageId,
+            CachedRagResult cachedResult
+    ) {
+        System.out.println("[RagService] RAG cache hit. Skip embedding, vector search, and LLM.");
+
+        boolean noAnswer = Boolean.TRUE.equals(cachedResult.getNoAnswer());
+
+        ChatMessage assistantMessage = saveAssistantMessage(
+                sessionId,
+                userId,
+                courseId,
+                cachedResult.getAnswer(),
+                noAnswer
+        );
+
+        List<CitationResponse> cachedCitations =
+                cachedResult.getCitations() == null
+                        ? List.of()
+                        : cachedResult.getCitations();
+
+        saveCitationsIfPresent(
+                assistantMessage.getId(),
+                cachedCitations,
+                true
+        );
+
+        chatSessionMapper.touch(sessionId, userId);
+
+        System.out.println("[RagService] Cached RAG response finished.");
+        System.out.println("[RagService] assistantMessageId = " + assistantMessage.getId());
+
+        return new RagAskResponse(
+                sessionId,
+                userMessageId,
+                assistantMessage.getId(),
+                cachedResult.getAnswer(),
+                cachedResult.getNoAnswer(),
+                cachedResult.getWorkflowType(),
+                cachedResult.getRetrievedChunkCount(),
+                cachedCitations
+        );
+    }
+
     private RagAskResponse buildNoAnswerResponse(
             Long sessionId,
             Long userId,
             Long courseId,
             Long userMessageId,
+            String question,
+            Integer topK,
             Integer retrievedChunkCount
     ) {
         System.out.println("[RagService] Build no-answer response.");
@@ -218,6 +297,22 @@ public class RagService {
         );
 
         chatSessionMapper.touch(sessionId, userId);
+
+        CachedRagResult resultToCache = new CachedRagResult(
+                NO_ANSWER_TEXT,
+                true,
+                WORKFLOW_TYPE,
+                retrievedChunkCount,
+                List.of()
+        );
+
+        ragCacheService.saveCourseRagCache(
+                userId,
+                courseId,
+                question,
+                topK,
+                resultToCache
+        );
 
         return new RagAskResponse(
                 sessionId,
@@ -332,6 +427,34 @@ public class RagService {
         }
 
         return message;
+    }
+
+    private void saveCitationsIfPresent(
+            Long assistantMessageId,
+            List<CitationResponse> citations,
+            boolean fromCache
+    ) {
+        if (citations == null || citations.isEmpty()) {
+            System.out.println("[RagService] No citations to save.");
+            return;
+        }
+
+        List<ChatMessageCitation> citationEntities =
+                citationBuilder.buildCitationEntities(
+                        assistantMessageId,
+                        citations
+                );
+
+        int insertedCitationCount =
+                chatMessageCitationMapper.insertBatch(citationEntities);
+
+        if (fromCache) {
+            System.out.println("[RagService] Inserted cached citation count = "
+                    + insertedCitationCount);
+        } else {
+            System.out.println("[RagService] Inserted citation count = "
+                    + insertedCitationCount);
+        }
     }
 
     private String callLlm(String prompt) {

@@ -56,3 +56,9 @@ app:
     redis-key-prefix: "vector:chunk:"
     embedding-model: text-embedding-v4
     embedding-dimension: 2048
+
+  rag:
+    cache:
+      enabled: true
+      ttl-minutes: 30
+      key-prefix: "rag:course:"

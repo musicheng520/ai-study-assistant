@@ -27,6 +27,7 @@ public class DocumentProcessingService {
     private final ChunkingService chunkingService;
     private final EmbeddingService embeddingService;
     private final RedisVectorService redisVectorService;
+    private final RagCacheService ragCacheService;
 
     @Async("documentProcessingExecutor")
     public void processDocumentAsync(Long jobId, Long documentId) {
@@ -180,6 +181,7 @@ public class DocumentProcessingService {
             );
 
             documentProcessingJobMapper.markSuccess(jobId, userId);
+            ragCacheService.evictCourseRagCache(userId, courseId);
 
             System.out.println("[DocumentProcessingService] Document processing success.");
             System.out.println("[DocumentProcessingService] documentId = " + documentId);
