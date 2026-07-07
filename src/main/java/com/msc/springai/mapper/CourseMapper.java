@@ -64,4 +64,21 @@ public interface CourseMapper {
         """)
     int existsByIdAndUserId(@Param("courseId") Long courseId,
                             @Param("userId") Long userId);
+
+    @Select("""
+    SELECT
+        id,
+        user_id AS userId,
+        name,
+        description,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+    FROM courses
+    WHERE id = #{courseId}
+      AND user_id = #{userId}
+""")
+    Course findByIdAndUserId(
+            @Param("courseId") Long courseId,
+            @Param("userId") Long userId
+    );
 }

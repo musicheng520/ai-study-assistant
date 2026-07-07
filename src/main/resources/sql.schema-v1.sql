@@ -116,3 +116,84 @@ CREATE INDEX idx_chunks_course_user
 
 CREATE INDEX idx_chunks_vector_status
     ON document_chunks(vector_status);
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+                                             id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                                             user_id BIGINT NOT NULL,
+                                             course_id BIGINT NOT NULL,
+                                             title VARCHAR(255),
+                                             scope_type VARCHAR(30) NOT NULL,
+                                             document_id BIGINT NULL,
+                                             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+                                             CONSTRAINT fk_chat_sessions_user
+                                                 FOREIGN KEY (user_id) REFERENCES users(id)
+                                                     ON DELETE CASCADE,
+
+                                             CONSTRAINT fk_chat_sessions_course
+                                                 FOREIGN KEY (course_id) REFERENCES courses(id)
+                                                     ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+                                             id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                                             session_id BIGINT NOT NULL,
+                                             user_id BIGINT NOT NULL,
+                                             course_id BIGINT NOT NULL,
+                                             role VARCHAR(30) NOT NULL,
+                                             content MEDIUMTEXT NOT NULL,
+                                             workflow_type VARCHAR(50),
+                                             no_answer BOOLEAN NOT NULL DEFAULT FALSE,
+                                             model_name VARCHAR(100),
+                                             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                                             CONSTRAINT fk_chat_messages_session
+                                                 FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+                                                     ON DELETE CASCADE,
+
+                                             CONSTRAINT fk_chat_messages_user
+                                                 FOREIGN KEY (user_id) REFERENCES users(id)
+                                                     ON DELETE CASCADE,
+
+                                             CONSTRAINT fk_chat_messages_course
+                                                 FOREIGN KEY (course_id) REFERENCES courses(id)
+                                                     ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS chat_message_citations (
+                                                      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                                                      message_id BIGINT NOT NULL,
+                                                      document_id BIGINT NOT NULL,
+                                                      chunk_id BIGINT NOT NULL,
+                                                      file_name VARCHAR(255),
+                                                      page_number INT,
+                                                      section_title VARCHAR(255),
+                                                      snippet TEXT,
+                                                      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                                                      CONSTRAINT fk_chat_citations_message
+                                                          FOREIGN KEY (message_id) REFERENCES chat_messages(id)
+                                                              ON DELETE CASCADE,
+
+                                                      CONSTRAINT fk_chat_citations_document
+                                                          FOREIGN KEY (document_id) REFERENCES documents(id)
+                                                              ON DELETE CASCADE,
+
+                                                      CONSTRAINT fk_chat_citations_chunk
+                                                          FOREIGN KEY (chunk_id) REFERENCES document_chunks(id)
+                                                              ON DELETE CASCADE
+);
+CREATE INDEX idx_chat_sessions_user_course
+    ON chat_sessions(user_id, course_id);
+
+CREATE INDEX idx_chat_messages_session
+    ON chat_messages(session_id);
+
+CREATE INDEX idx_chat_citations_message
+    ON chat_message_citations(message_id);
+
+CREATE INDEX idx_chat_citations_document
+    ON chat_message_citations(document_id);
+
+CREATE INDEX idx_chat_citations_chunk
+    ON chat_message_citations(chunk_id);
