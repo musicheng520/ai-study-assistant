@@ -93,19 +93,23 @@ public class GlobalExceptionHandler {
                     "QUIZ_NOT_FOUND",
                     "FLASHCARD_NOT_FOUND" -> HttpStatus.NOT_FOUND;
 
+            case "AI_GENERATION_FAILED" -> HttpStatus.BAD_GATEWAY;
+
             case "AI_OUTPUT_INVALID",
                     "INVALID_DRAFT_KEY",
                     "INVALID_DRAFT_SCOPE",
                     "INVALID_DRAFT_TYPE",
                     "INVALID_DRAFT_VALUE",
                     "INVALID_DRAFT_KEY_PARAMS",
-                    "PARAM_HASH_FAILED",
-                    "REDIS_DRAFT_SAVE_FAILED",
-                    "REDIS_DRAFT_READ_FAILED",
-                    "REDIS_DRAFT_DELETE_FAILED",
                     "DOCUMENT_NOT_READY",
                     "NO_READY_DOCUMENTS",
                     "VALIDATION_FAILED" -> HttpStatus.BAD_REQUEST;
+
+            case "JSON_SERIALIZATION_FAILED",
+                    "REDIS_DRAFT_SAVE_FAILED",
+                    "REDIS_DRAFT_READ_FAILED",
+                    "REDIS_DRAFT_DELETE_FAILED",
+                    "PARAM_HASH_FAILED" -> HttpStatus.INTERNAL_SERVER_ERROR;
 
             default -> HttpStatus.BAD_REQUEST;
         };

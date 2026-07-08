@@ -5,6 +5,7 @@ import com.msc.springai.entity.DocumentChunk;
 import com.msc.springai.service.EmbeddingService;
 import com.msc.springai.service.RedisVectorService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.*;
 
 
@@ -16,6 +17,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
+@Profile("dev")
 @RestController
 @RequiredArgsConstructor
 public class DevRedisVectorController {

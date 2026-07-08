@@ -3,6 +3,7 @@ package com.msc.springai.dev;
 import com.msc.springai.dto.document.ExtractedDocument;
 import com.msc.springai.service.DocumentTextExtractor;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.nio.file.Paths;
 import java.util.Map;
 
+@Profile("dev")
 @RestController
 @RequiredArgsConstructor
 public class DevDocumentParseController {
