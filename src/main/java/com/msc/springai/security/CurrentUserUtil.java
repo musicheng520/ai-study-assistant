@@ -1,5 +1,6 @@
 package com.msc.springai.security;
 
+import com.msc.springai.exception.BusinessException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -9,10 +10,15 @@ public class CurrentUserUtil {
     }
 
     public static Long getCurrentUserId() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        Authentication authentication = SecurityContextHolder
+                .getContext()
+                .getAuthentication();
 
         if (authentication == null || authentication.getPrincipal() == null) {
-            throw new IllegalArgumentException("Unauthenticated user");
+            throw new BusinessException(
+                    "UNAUTHORIZED",
+                    "Unauthenticated user."
+            );
         }
 
         Object principal = authentication.getPrincipal();
@@ -21,6 +27,18 @@ public class CurrentUserUtil {
             return userId;
         }
 
-        return Long.valueOf(principal.toString());
+        if (principal instanceof Integer userId) {
+            return userId.longValue();
+        }
+
+        try {
+            return Long.valueOf(principal.toString());
+
+        } catch (NumberFormatException e) {
+            throw new BusinessException(
+                    "UNAUTHORIZED",
+                    "Cannot resolve current user id."
+            );
+        }
     }
 }

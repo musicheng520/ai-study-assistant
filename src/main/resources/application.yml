@@ -28,10 +28,11 @@ spring:
     openai:
       api-key: ${DASHSCOPE_API_KEY}
       base-url: https://ws-8tj6pwtxv5lpmpir.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-
       chat:
         options:
-          model: qwen3.7-plus
+          model: deepseek-v4-pro
+          temperature: 0.2
+          max-tokens: 2000
 
       embedding:
         model: text-embedding-v4
