@@ -71,6 +71,29 @@ public interface CourseDocumentMapper {
     int countByCourseIdAndUserId(@Param("courseId") Long courseId,
                                  @Param("userId") Long userId);
 
+    @Select("""
+        SELECT COUNT(*)
+        FROM documents
+        WHERE user_id = #{userId}
+          AND course_id = #{courseId}
+          AND status = 'READY'
+        """)
+    int countReadyByUserIdAndCourseId(
+            @Param("userId") Long userId,
+            @Param("courseId") Long courseId
+    );
+
+    @Select("""
+        SELECT *
+        FROM documents
+        WHERE id = #{documentId}
+          AND user_id = #{userId}
+        """)
+    CourseDocument findByIdAndUserId(
+            @Param("documentId") Long documentId,
+            @Param("userId") Long userId
+    );
+
     @Update("""
         UPDATE documents
         SET status = #{status},

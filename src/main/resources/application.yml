@@ -62,3 +62,9 @@ app:
       enabled: true
       ttl-minutes: 30
       key-prefix: "rag:course:"
+
+  retrieval:
+    default-top-k: 8
+    similarity-threshold: 0.50
+    course-generation-query: "Summarize the main topics, key concepts, definitions and exam-relevant ideas from this course."
+    document-generation-query: "Summarize the main topics, key concepts, definitions and exam-relevant ideas from this document."
