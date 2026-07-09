@@ -262,6 +262,7 @@ public class QuizSubmitService {
 
         if (QUESTION_TYPE_SHORT_ANSWER.equalsIgnoreCase(questionType)) {
             return shortAnswerGradingService.grade(
+                    question.getQuestionText(),
                     userAnswer,
                     question.getCorrectAnswer(),
                     question.getExplanation()
