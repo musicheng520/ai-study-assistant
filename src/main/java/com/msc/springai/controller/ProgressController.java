@@ -1,9 +1,6 @@
 package com.msc.springai.controller;
 
-import com.msc.springai.dto.learning.response.CourseProgressResponse;
-import com.msc.springai.dto.learning.response.CourseReviewRecommendationsResponse;
-import com.msc.springai.dto.learning.response.CourseWeakTopicsResponse;
-import com.msc.springai.dto.learning.response.UserProgressOverviewResponse;
+import com.msc.springai.dto.learning.response.*;
 import com.msc.springai.security.CurrentUserUtil;
 import com.msc.springai.service.ProgressService;
 import lombok.RequiredArgsConstructor;
@@ -56,6 +53,25 @@ public class ProgressController {
                 currentUserId,
                 courseId
         );
+    }
+
+    @GetMapping("/api/courses/{courseId}/activity")
+    public CourseActivityResponse getCourseActivity(
+            @PathVariable Long courseId
+    ) {
+        Long currentUserId = CurrentUserUtil.getCurrentUserId();
+
+        return progressService.getCourseActivity(
+                currentUserId,
+                courseId
+        );
+    }
+
+    @GetMapping("/api/progress/streak")
+    public StudyStreakResponse getStudyStreak() {
+        Long currentUserId = CurrentUserUtil.getCurrentUserId();
+
+        return progressService.getStudyStreak(currentUserId);
     }
 
 }

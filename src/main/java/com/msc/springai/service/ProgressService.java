@@ -1,10 +1,6 @@
 package com.msc.springai.service;
 
-import com.msc.springai.dto.learning.response.CourseProgressResponse;
-import com.msc.springai.dto.learning.response.CourseWeakTopicsResponse;
-import com.msc.springai.dto.learning.response.RecentActivityResponse;
-import com.msc.springai.dto.learning.response.UserProgressOverviewResponse;
-import com.msc.springai.dto.learning.response.WeakTopicResponse;
+import com.msc.springai.dto.learning.response.*;
 import com.msc.springai.entity.Course;
 import com.msc.springai.entity.StudyStreak;
 import com.msc.springai.exception.BusinessException;
@@ -16,8 +12,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import com.msc.springai.dto.learning.projection.DocumentReviewCandidate;
 import com.msc.springai.dto.learning.projection.LowScoreQuizCandidate;
-import com.msc.springai.dto.learning.response.CourseReviewRecommendationsResponse;
-import com.msc.springai.dto.learning.response.ReviewRecommendationItemResponse;
 import com.msc.springai.mapper.ProgressRecommendationMapper;
 
 import java.time.LocalDateTime;
@@ -441,6 +435,47 @@ public class ProgressService {
                 priority,
                 "Generate a quiz for this document and submit your first attempt."
         ));
+    }
+
+    public CourseActivityResponse getCourseActivity(
+            Long userId,
+            Long courseId
+    ) {
+        validateCourseAccess(
+                userId,
+                courseId
+        );
+
+        List<RecentActivityResponse> activities =
+                progressStatsMapper.findRecentActivityByCourse(
+                        userId,
+                        courseId,
+                        RECENT_ACTIVITY_LIMIT
+                );
+
+        return new CourseActivityResponse(
+                courseId,
+                activities.size(),
+                activities
+        );
+    }
+
+    public StudyStreakResponse getStudyStreak(Long userId) {
+        StudyStreak streak = studyStreakMapper.findByUserId(userId);
+
+        if (streak == null) {
+            return new StudyStreakResponse(
+                    0,
+                    0,
+                    null
+            );
+        }
+
+        return new StudyStreakResponse(
+                safeInt(streak.getCurrentStreak()),
+                safeInt(streak.getLongestStreak()),
+                streak.getLastActivityDate()
+        );
     }
 
     private String normalizeTopic(String topic) {
