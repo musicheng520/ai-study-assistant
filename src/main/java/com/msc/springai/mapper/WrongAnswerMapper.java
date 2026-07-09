@@ -1,5 +1,6 @@
 package com.msc.springai.mapper;
 
+import com.msc.springai.dto.learning.response.WeakTopicResponse;
 import com.msc.springai.entity.WrongAnswer;
 import org.apache.ibatis.annotations.*;
 
@@ -90,4 +91,33 @@ public interface WrongAnswerMapper {
             @Param("wrongAnswerId") Long wrongAnswerId,
             @Param("userId") Long userId
     );
+    @Select("""
+        SELECT
+            topic AS topic,
+            COUNT(*) AS wrong_count,
+            SUM(CASE WHEN resolved = TRUE THEN 1 ELSE 0 END) AS resolved_count,
+            SUM(CASE WHEN resolved = FALSE THEN 1 ELSE 0 END) AS unresolved_count,
+            MAX(created_at) AS last_wrong_at,
+            COUNT(DISTINCT quiz_id) AS related_quiz_count
+        FROM wrong_answers
+        WHERE user_id = #{userId}
+          AND course_id = #{courseId}
+        GROUP BY topic
+        ORDER BY unresolved_count DESC,
+                 wrong_count DESC,
+                 last_wrong_at DESC
+        """)
+    @Results({
+            @Result(property = "topic", column = "topic"),
+            @Result(property = "wrongCount", column = "wrong_count"),
+            @Result(property = "resolvedCount", column = "resolved_count"),
+            @Result(property = "unresolvedCount", column = "unresolved_count"),
+            @Result(property = "lastWrongAt", column = "last_wrong_at"),
+            @Result(property = "relatedQuizCount", column = "related_quiz_count")
+    })
+    List<WeakTopicResponse> findWeakTopics(
+            @Param("userId") Long userId,
+            @Param("courseId") Long courseId
+    );
+
 }
