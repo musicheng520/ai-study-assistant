@@ -28,15 +28,25 @@ public class DraftCacheService {
     private static final String QUIZ_TYPE = "quiz";
     private static final String FLASHCARD_TYPE = "flashcard";
 
+    private static final String SCOPE_COURSE = "COURSE";
+    private static final String SCOPE_DOCUMENT = "DOCUMENT";
+    private static final String SCOPE_WEAK_TOPIC = "WEAK_TOPIC";
+
     private static final Set<String> VALID_TYPES = Set.of(
             SUMMARY_TYPE,
             QUIZ_TYPE,
             FLASHCARD_TYPE
     );
 
-    private static final Set<String> VALID_SCOPES = Set.of(
-            "COURSE",
-            "DOCUMENT"
+    private static final Set<String> COURSE_DOCUMENT_SCOPES = Set.of(
+            SCOPE_COURSE,
+            SCOPE_DOCUMENT
+    );
+
+    private static final Set<String> FLASHCARD_SCOPES = Set.of(
+            SCOPE_COURSE,
+            SCOPE_DOCUMENT,
+            SCOPE_WEAK_TOPIC
     );
 
     private final StringRedisTemplate stringRedisTemplate;
@@ -91,7 +101,11 @@ public class DraftCacheService {
             String key,
             Object value
     ) {
-        saveDraft(key, value, DEFAULT_DRAFT_TTL);
+        saveDraft(
+                key,
+                value,
+                DEFAULT_DRAFT_TTL
+        );
     }
 
     public <T> T getDraft(
@@ -115,7 +129,10 @@ public class DraftCacheService {
                 );
             }
 
-            T result = objectMapper.readValue(json, clazz);
+            T result = objectMapper.readValue(
+                    json,
+                    clazz
+            );
 
             System.out.println("[DraftCacheService] Draft found.");
 
@@ -246,13 +263,10 @@ public class DraftCacheService {
          * cache:quiz:draft:{userId}:{courseId}:{scope}:{paramsHash}
          * cache:flashcard:draft:{userId}:{courseId}:{scope}:{paramsHash}
          *
-         * parts[0] = cache
-         * parts[1] = summary / quiz / flashcard
-         * parts[2] = draft
-         * parts[3] = userId
-         * parts[4] = courseId
-         * parts[5] = scope
-         * parts[6] = paramsHash
+         * Examples:
+         * cache:summary:draft:2:3:COURSE:abc123
+         * cache:quiz:draft:2:3:DOCUMENT:def456
+         * cache:flashcard:draft:2:3:WEAK_TOPIC:xyz789
          */
         if (parts.length != 7) {
             throw new BusinessException(
@@ -262,9 +276,9 @@ public class DraftCacheService {
         }
 
         String cachePrefix = parts[0];
-        String type = parts[1];
+        String type = normalizeType(parts[1]);
         String draftPart = parts[2];
-        String scope = parts[5];
+        String scope = normalizeScope(parts[5]);
         String paramsHash = parts[6];
 
         if (!CACHE_PREFIX.equals(cachePrefix)) {
@@ -288,12 +302,10 @@ public class DraftCacheService {
             );
         }
 
-        if (!VALID_SCOPES.contains(scope)) {
-            throw new BusinessException(
-                    "INVALID_DRAFT_SCOPE",
-                    "Draft scope must be COURSE or DOCUMENT."
-            );
-        }
+        validateScopeForType(
+                type,
+                scope
+        );
 
         if (paramsHash == null || paramsHash.isBlank()) {
             throw new BusinessException(
@@ -348,7 +360,10 @@ public class DraftCacheService {
             String scope,
             Map<String, Object> params
     ) {
-        if (!VALID_TYPES.contains(type)) {
+        String normalizedType = normalizeType(type);
+        String normalizedScope = normalizeScope(scope);
+
+        if (!VALID_TYPES.contains(normalizedType)) {
             throw new BusinessException(
                     "INVALID_DRAFT_TYPE",
                     "Draft type is invalid."
@@ -369,22 +384,72 @@ public class DraftCacheService {
             );
         }
 
-        if (!VALID_SCOPES.contains(scope)) {
+        validateScopeForType(
+                normalizedType,
+                normalizedScope
+        );
+
+        String paramsHash = buildParamsHash(params);
+
+        return CACHE_PREFIX
+                + ":" + normalizedType
+                + ":" + DRAFT_PART
+                + ":" + userId
+                + ":" + courseId
+                + ":" + normalizedScope
+                + ":" + paramsHash;
+    }
+
+    private void validateScopeForType(
+            String type,
+            String scope
+    ) {
+        if (FLASHCARD_TYPE.equals(type)) {
+            validateFlashcardScope(scope);
+            return;
+        }
+
+        validateCourseOrDocumentScope(scope);
+    }
+
+    private void validateCourseOrDocumentScope(String scope) {
+        if (!COURSE_DOCUMENT_SCOPES.contains(scope)) {
             throw new BusinessException(
                     "INVALID_DRAFT_SCOPE",
                     "Draft scope must be COURSE or DOCUMENT."
             );
         }
+    }
 
-        String paramsHash = buildParamsHash(params);
+    private void validateFlashcardScope(String scope) {
+        if (!FLASHCARD_SCOPES.contains(scope)) {
+            throw new BusinessException(
+                    "INVALID_DRAFT_SCOPE",
+                    "Flashcard draft scope must be COURSE, DOCUMENT or WEAK_TOPIC."
+            );
+        }
+    }
 
-        return CACHE_PREFIX
-                + ":" + type
-                + ":" + DRAFT_PART
-                + ":" + userId
-                + ":" + courseId
-                + ":" + scope
-                + ":" + paramsHash;
+    private String normalizeType(String type) {
+        if (type == null || type.isBlank()) {
+            throw new BusinessException(
+                    "INVALID_DRAFT_TYPE",
+                    "Draft type is required."
+            );
+        }
+
+        return type.trim().toLowerCase();
+    }
+
+    private String normalizeScope(String scope) {
+        if (scope == null || scope.isBlank()) {
+            throw new BusinessException(
+                    "INVALID_DRAFT_SCOPE",
+                    "Draft scope is required."
+            );
+        }
+
+        return scope.trim().toUpperCase();
     }
 
     private String buildParamsHash(Map<String, Object> params) {

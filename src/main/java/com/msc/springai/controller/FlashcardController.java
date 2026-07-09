@@ -2,9 +2,11 @@ package com.msc.springai.controller;
 
 import com.msc.springai.dto.learning.request.FlashcardGenerateRequest;
 import com.msc.springai.dto.learning.request.SaveDraftRequest;
+import com.msc.springai.dto.learning.request.WrongTopicFlashcardGenerateRequest;
 import com.msc.springai.dto.learning.response.FlashcardGenerateResponse;
 import com.msc.springai.dto.learning.response.FlashcardSaveResponse;
 import com.msc.springai.dto.learning.response.SavedFlashcardResponse;
+import com.msc.springai.dto.learning.response.WeakTopicFlashcardGenerateResponse;
 import com.msc.springai.security.CurrentUserUtil;
 import com.msc.springai.service.FlashcardService;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +29,20 @@ public class FlashcardController {
         Long currentUserId = CurrentUserUtil.getCurrentUserId();
 
         return flashcardService.generateCourseFlashcards(
+                currentUserId,
+                courseId,
+                request
+        );
+    }
+
+    @PostMapping("/api/courses/{courseId}/flashcards/generate-from-wrong-topics")
+    public WeakTopicFlashcardGenerateResponse generateFlashcardsFromWrongTopics(
+            @PathVariable Long courseId,
+            @RequestBody(required = false) WrongTopicFlashcardGenerateRequest request
+    ) {
+        Long currentUserId = CurrentUserUtil.getCurrentUserId();
+
+        return flashcardService.generateFlashcardsFromWrongTopics(
                 currentUserId,
                 courseId,
                 request

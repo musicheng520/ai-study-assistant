@@ -4,9 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.msc.springai.dto.learning.draft.FlashcardDraftValue;
 import com.msc.springai.dto.learning.request.FlashcardGenerateRequest;
 import com.msc.springai.dto.learning.request.SaveDraftRequest;
+import com.msc.springai.dto.learning.request.WrongTopicFlashcardGenerateRequest;
 import com.msc.springai.dto.learning.response.FlashcardGenerateResponse;
 import com.msc.springai.dto.learning.response.FlashcardSaveResponse;
 import com.msc.springai.dto.learning.response.SavedFlashcardResponse;
+import com.msc.springai.dto.learning.response.WeakTopicFlashcardGenerateResponse;
+import com.msc.springai.dto.learning.response.WeakTopicResponse;
 import com.msc.springai.dto.learning.result.FlashcardItemResult;
 import com.msc.springai.dto.learning.result.FlashcardResult;
 import com.msc.springai.dto.learning.retrieval.RetrievedChunk;
@@ -18,6 +21,7 @@ import com.msc.springai.mapper.CourseDocumentMapper;
 import com.msc.springai.mapper.CourseMapper;
 import com.msc.springai.mapper.FlashcardMapper;
 import com.msc.springai.mapper.LearningHistoryMapper;
+import com.msc.springai.mapper.WrongAnswerMapper;
 import com.msc.springai.service.prompt.FlashcardPromptBuilder;
 import com.msc.springai.service.validator.FlashcardOutputValidator;
 import lombok.RequiredArgsConstructor;
@@ -26,7 +30,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -34,6 +43,9 @@ public class FlashcardService {
 
     private static final String SCOPE_COURSE = "COURSE";
     private static final String SCOPE_DOCUMENT = "DOCUMENT";
+    private static final String SCOPE_WEAK_TOPIC = "WEAK_TOPIC";
+
+    private static final String SOURCE_TYPE_QUIZ_WRONG_TOPIC = "QUIZ_WRONG_TOPIC";
 
     private final RetrievalService retrievalService;
     private final DraftCacheService draftCacheService;
@@ -44,6 +56,7 @@ public class FlashcardService {
     private final CourseMapper courseMapper;
     private final CourseDocumentMapper courseDocumentMapper;
     private final LearningHistoryMapper learningHistoryMapper;
+    private final WrongAnswerMapper wrongAnswerMapper;
 
     private final ObjectMapper objectMapper;
     private final ChatClient.Builder chatClientBuilder;
@@ -53,6 +66,11 @@ public class FlashcardService {
             Long courseId,
             FlashcardGenerateRequest request
     ) {
+        validateCourseAccess(
+                userId,
+                courseId
+        );
+
         FlashcardGenerateOptions options = normalizeOptions(request);
 
         List<RetrievedChunk> chunks = retrievalService.retrieveCourseChunks(
@@ -181,6 +199,113 @@ public class FlashcardService {
         );
     }
 
+    public WeakTopicFlashcardGenerateResponse generateFlashcardsFromWrongTopics(
+            Long userId,
+            Long courseId,
+            WrongTopicFlashcardGenerateRequest request
+    ) {
+        validateCourseAccess(
+                userId,
+                courseId
+        );
+
+        WrongTopicFlashcardOptions options = normalizeWrongTopicOptions(request);
+
+        List<WeakTopicResponse> weakTopics = wrongAnswerMapper.findWeakTopics(
+                userId,
+                courseId
+        );
+
+        List<String> topics = weakTopics.stream()
+                .filter(topic -> topic.getUnresolvedCount() != null)
+                .filter(topic -> topic.getUnresolvedCount() > 0)
+                .limit(options.topicLimit())
+                .map(WeakTopicResponse::getTopic)
+                .filter(topic -> topic != null && !topic.isBlank())
+                .map(String::trim)
+                .toList();
+
+        if (topics.isEmpty()) {
+            throw new BusinessException(
+                    "NO_UNRESOLVED_WRONG_TOPICS",
+                    "No unresolved wrong topics found for this course."
+            );
+        }
+
+        String retrievalQuery = String.join("; ", topics);
+
+        List<RetrievedChunk> chunks = retrievalService.retrieveCourseChunks(
+                userId,
+                courseId,
+                options.topK(),
+                retrievalQuery
+        );
+
+        int expectedCardCount = topics.size() * options.cardsPerTopic();
+
+        String prompt = flashcardPromptBuilder.buildWeakTopicFlashcardPrompt(
+                topics,
+                options.cardsPerTopic(),
+                options.difficulty(),
+                chunks
+        );
+
+        FlashcardResult result = callLlmForFlashcards(prompt);
+
+        ensureFlashcardDefaults(
+                result,
+                options.difficulty()
+        );
+
+        normalizeWeakTopicCards(
+                result,
+                topics,
+                options.difficulty()
+        );
+
+        flashcardOutputValidator.validate(
+                result,
+                expectedCardCount
+        );
+
+        FlashcardDraftValue draftValue = new FlashcardDraftValue(
+                userId,
+                courseId,
+                null,
+                SCOPE_WEAK_TOPIC,
+                expectedCardCount,
+                options.difficulty(),
+                result
+        );
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("topicLimit", options.topicLimit());
+        params.put("cardsPerTopic", options.cardsPerTopic());
+        params.put("difficulty", options.difficulty());
+        params.put("topK", options.topK());
+        params.put("topics", topics);
+
+        String draftKey = draftCacheService.buildFlashcardDraftKey(
+                userId,
+                courseId,
+                SCOPE_WEAK_TOPIC,
+                params
+        );
+
+        draftCacheService.saveDraft(
+                draftKey,
+                draftValue,
+                Duration.ofDays(7)
+        );
+
+        return new WeakTopicFlashcardGenerateResponse(
+                draftKey,
+                SOURCE_TYPE_QUIZ_WRONG_TOPIC,
+                topics,
+                result.getCards()
+        );
+    }
+
     @Transactional
     public FlashcardSaveResponse saveFlashcards(
             Long userId,
@@ -242,7 +367,7 @@ public class FlashcardService {
             flashcard.setBack(item.getBack());
             flashcard.setTopic(item.getTopic());
             flashcard.setDifficulty(item.getDifficulty());
-            flashcard.setSourceType(draft.getSourceScope());
+            flashcard.setSourceType(toFlashcardSourceType(draft.getSourceScope()));
             flashcard.setSourceChunkId(item.getSourceChunkId());
 
             flashcardMapper.insert(flashcard);
@@ -435,6 +560,57 @@ public class FlashcardService {
         }
     }
 
+    private void normalizeWeakTopicCards(
+            FlashcardResult result,
+            List<String> topics,
+            String difficulty
+    ) {
+        if (result == null || result.getCards() == null || result.getCards().isEmpty()) {
+            return;
+        }
+
+        for (int i = 0; i < result.getCards().size(); i++) {
+            FlashcardItemResult card = result.getCards().get(i);
+
+            if (card.getDifficulty() == null || card.getDifficulty().isBlank()) {
+                card.setDifficulty(difficulty);
+            }
+
+            if (card.getTopic() == null || card.getTopic().isBlank()) {
+                card.setTopic(topics.get(i % topics.size()));
+                continue;
+            }
+
+            String canonicalTopic = findCanonicalTopic(
+                    card.getTopic(),
+                    topics
+            );
+
+            if (canonicalTopic == null) {
+                card.setTopic(topics.get(i % topics.size()));
+            } else {
+                card.setTopic(canonicalTopic);
+            }
+        }
+    }
+
+    private String findCanonicalTopic(
+            String topic,
+            List<String> allowedTopics
+    ) {
+        if (topic == null || allowedTopics == null || allowedTopics.isEmpty()) {
+            return null;
+        }
+
+        for (String allowedTopic : allowedTopics) {
+            if (allowedTopic.equalsIgnoreCase(topic.trim())) {
+                return allowedTopic;
+            }
+        }
+
+        return null;
+    }
+
     private void validateFlashcardDraft(
             Long userId,
             FlashcardDraftValue draft
@@ -521,6 +697,51 @@ public class FlashcardService {
         );
     }
 
+    private WrongTopicFlashcardOptions normalizeWrongTopicOptions(
+            WrongTopicFlashcardGenerateRequest request
+    ) {
+        int topicLimit = request == null || request.getTopicLimit() == null
+                ? 3
+                : Math.max(1, Math.min(request.getTopicLimit(), 5));
+
+        int cardsPerTopic = request == null || request.getCardsPerTopic() == null
+                ? 3
+                : Math.max(1, Math.min(request.getCardsPerTopic(), 5));
+
+        String difficulty = request == null || request.getDifficulty() == null
+                ? "MEDIUM"
+                : request.getDifficulty().trim().toUpperCase();
+
+        if (!Set.of("EASY", "MEDIUM", "HARD").contains(difficulty)) {
+            difficulty = "MEDIUM";
+        }
+
+        int defaultTopK = topicLimit * 3;
+
+        int topK = request == null || request.getTopK() == null
+                ? defaultTopK
+                : Math.max(1, Math.min(request.getTopK(), 10));
+
+        return new WrongTopicFlashcardOptions(
+                topicLimit,
+                cardsPerTopic,
+                difficulty,
+                topK
+        );
+    }
+
+    private String toFlashcardSourceType(String sourceScope) {
+        if (sourceScope == null || sourceScope.isBlank()) {
+            return "MANUAL";
+        }
+
+        if (SCOPE_WEAK_TOPIC.equalsIgnoreCase(sourceScope)) {
+            return SOURCE_TYPE_QUIZ_WRONG_TOPIC;
+        }
+
+        return sourceScope;
+    }
+
     private String extractJson(String raw) {
         String cleaned = raw.trim();
 
@@ -588,6 +809,14 @@ public class FlashcardService {
             String retrievalQuery,
             int count,
             String difficulty
+    ) {
+    }
+
+    private record WrongTopicFlashcardOptions(
+            int topicLimit,
+            int cardsPerTopic,
+            String difficulty,
+            int topK
     ) {
     }
 }
