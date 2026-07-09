@@ -288,3 +288,80 @@ CREATE INDEX idx_learning_history_target
 
 CREATE INDEX idx_learning_history_created_at
     ON learning_history(created_at);
+
+
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+                                             id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+                                             user_id BIGINT NOT NULL,
+                                             course_id BIGINT NOT NULL,
+                                             quiz_id BIGINT NOT NULL,
+
+                                             score DECIMAL(5,2) NOT NULL,
+                                             total_questions INT NOT NULL,
+                                             correct_count INT NOT NULL,
+
+                                             started_at DATETIME NULL,
+                                             submitted_at DATETIME NOT NULL,
+
+                                             INDEX idx_quiz_attempts_user_id (user_id),
+                                             INDEX idx_quiz_attempts_course_id (course_id),
+                                             INDEX idx_quiz_attempts_quiz_id (quiz_id),
+                                             INDEX idx_quiz_attempts_submitted_at (submitted_at)
+);
+
+CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
+                                                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+                                                    attempt_id BIGINT NOT NULL,
+                                                    question_id BIGINT NOT NULL,
+
+                                                    user_answer TEXT,
+                                                    is_correct BOOLEAN NOT NULL,
+
+                                                    created_at DATETIME NOT NULL,
+
+                                                    INDEX idx_quiz_attempt_answers_attempt_id (attempt_id),
+                                                    INDEX idx_quiz_attempt_answers_question_id (question_id),
+                                                    UNIQUE KEY uk_attempt_question (attempt_id, question_id)
+);
+
+CREATE TABLE IF NOT EXISTS wrong_answers (
+                                             id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+                                             user_id BIGINT NOT NULL,
+                                             course_id BIGINT NOT NULL,
+                                             quiz_id BIGINT NOT NULL,
+                                             question_id BIGINT NOT NULL,
+
+                                             topic VARCHAR(100) NOT NULL,
+                                             user_answer TEXT,
+                                             correct_answer TEXT,
+                                             explanation TEXT,
+
+                                             resolved BOOLEAN NOT NULL DEFAULT FALSE,
+
+                                             created_at DATETIME NOT NULL,
+
+                                             INDEX idx_wrong_answers_user_id (user_id),
+                                             INDEX idx_wrong_answers_course_id (course_id),
+                                             INDEX idx_wrong_answers_quiz_id (quiz_id),
+                                             INDEX idx_wrong_answers_question_id (question_id),
+                                             INDEX idx_wrong_answers_topic (topic),
+                                             INDEX idx_wrong_answers_resolved (resolved),
+                                             INDEX idx_wrong_answers_created_at (created_at)
+);
+
+CREATE TABLE IF NOT EXISTS study_streaks (
+                                             id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+                                             user_id BIGINT NOT NULL,
+                                             current_streak INT NOT NULL DEFAULT 0,
+                                             longest_streak INT NOT NULL DEFAULT 0,
+                                             last_activity_date DATE NULL,
+
+                                             updated_at DATETIME NOT NULL,
+
+                                             UNIQUE KEY uk_study_streaks_user_id (user_id),
+                                             INDEX idx_study_streaks_last_activity_date (last_activity_date)
+);
