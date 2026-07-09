@@ -14,6 +14,16 @@ import com.msc.springai.mapper.StudyStreakMapper;
 import com.msc.springai.mapper.WrongAnswerMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import com.msc.springai.dto.learning.projection.DocumentReviewCandidate;
+import com.msc.springai.dto.learning.projection.LowScoreQuizCandidate;
+import com.msc.springai.dto.learning.response.CourseReviewRecommendationsResponse;
+import com.msc.springai.dto.learning.response.ReviewRecommendationItemResponse;
+import com.msc.springai.mapper.ProgressRecommendationMapper;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 
 import java.util.List;
 
@@ -22,6 +32,11 @@ import java.util.List;
 public class ProgressService {
 
     private static final int RECENT_ACTIVITY_LIMIT = 10;
+    private static final double LOW_SCORE_THRESHOLD = 60.0;
+    private static final int REVIEW_STALE_DAYS = 7;
+    private static final int MAX_RECOMMENDATIONS = 3;
+
+    private final ProgressRecommendationMapper progressRecommendationMapper;
 
     private final CourseMapper courseMapper;
     private final WrongAnswerMapper wrongAnswerMapper;
@@ -201,6 +216,239 @@ public class ProgressService {
                 null,
                 recentActivity
         );
+    }
+
+    public CourseReviewRecommendationsResponse getCourseRecommendations(
+            Long userId,
+            Long courseId
+    ) {
+        validateCourseAccess(
+                userId,
+                courseId
+        );
+
+        List<ReviewRecommendationItemResponse> recommendations = new ArrayList<>();
+        Set<String> addedTopics = new HashSet<>();
+
+        List<WeakTopicResponse> weakTopics = wrongAnswerMapper.findWeakTopics(
+                userId,
+                courseId
+        );
+
+        int priority = 1;
+
+        priority = addWeakTopicRecommendation(
+                recommendations,
+                addedTopics,
+                weakTopics,
+                priority
+        );
+
+        priority = addStaleReviewTopicRecommendation(
+                userId,
+                courseId,
+                recommendations,
+                addedTopics,
+                weakTopics,
+                priority
+        );
+
+        priority = addLowScoreQuizRecommendation(
+                userId,
+                courseId,
+                recommendations,
+                addedTopics,
+                priority
+        );
+
+        if (recommendations.isEmpty()) {
+            addDocumentPracticeRecommendation(
+                    userId,
+                    courseId,
+                    recommendations,
+                    priority
+            );
+        }
+
+        return new CourseReviewRecommendationsResponse(
+                courseId,
+                recommendations.size(),
+                recommendations
+        );
+    }
+
+    private int addWeakTopicRecommendation(
+            List<ReviewRecommendationItemResponse> recommendations,
+            Set<String> addedTopics,
+            List<WeakTopicResponse> weakTopics,
+            int priority
+    ) {
+        for (WeakTopicResponse weakTopic : weakTopics) {
+            if (safeInt(weakTopic.getUnresolvedCount()) <= 0) {
+                continue;
+            }
+
+            String topic = normalizeTopic(weakTopic.getTopic());
+
+            recommendations.add(new ReviewRecommendationItemResponse(
+                    "WEAK_TOPIC",
+                    topic,
+                    null,
+                    null,
+                    "You have " + weakTopic.getUnresolvedCount()
+                            + " unresolved wrong answers in this topic.",
+                    priority,
+                    "Review this topic and generate flashcards."
+            ));
+
+            addedTopics.add(topic.toLowerCase());
+
+            return priority + 1;
+        }
+
+        return priority;
+    }
+
+    private int addStaleReviewTopicRecommendation(
+            Long userId,
+            Long courseId,
+            List<ReviewRecommendationItemResponse> recommendations,
+            Set<String> addedTopics,
+            List<WeakTopicResponse> weakTopics,
+            int priority
+    ) {
+        if (recommendations.size() >= MAX_RECOMMENDATIONS) {
+            return priority;
+        }
+
+        LocalDateTime since = LocalDateTime.now().minusDays(REVIEW_STALE_DAYS);
+
+        for (WeakTopicResponse weakTopic : weakTopics) {
+            if (recommendations.size() >= MAX_RECOMMENDATIONS) {
+                return priority;
+            }
+
+            if (safeInt(weakTopic.getUnresolvedCount()) <= 0) {
+                continue;
+            }
+
+            String topic = normalizeTopic(weakTopic.getTopic());
+
+            if (addedTopics.contains(topic.toLowerCase())) {
+                continue;
+            }
+
+            Integer reviewCount = progressRecommendationMapper.countTopicReviewsSince(
+                    userId,
+                    courseId,
+                    topic,
+                    since
+            );
+
+            if (safeInt(reviewCount) > 0) {
+                continue;
+            }
+
+            recommendations.add(new ReviewRecommendationItemResponse(
+                    "STALE_REVIEW_TOPIC",
+                    topic,
+                    null,
+                    null,
+                    "You have not reviewed this weak topic in the last "
+                            + REVIEW_STALE_DAYS + " days.",
+                    priority,
+                    "Review this topic before taking another quiz."
+            ));
+
+            addedTopics.add(topic.toLowerCase());
+            priority++;
+        }
+
+        return priority;
+    }
+
+    private int addLowScoreQuizRecommendation(
+            Long userId,
+            Long courseId,
+            List<ReviewRecommendationItemResponse> recommendations,
+            Set<String> addedTopics,
+            int priority
+    ) {
+        if (recommendations.size() >= MAX_RECOMMENDATIONS) {
+            return priority;
+        }
+
+        LowScoreQuizCandidate lowScoreQuiz =
+                progressRecommendationMapper.findLatestLowScoreQuiz(
+                        userId,
+                        courseId,
+                        LOW_SCORE_THRESHOLD
+                );
+
+        if (lowScoreQuiz == null) {
+            return priority;
+        }
+
+        String topic = normalizeTopic(
+                lowScoreQuiz.getTopic() == null || lowScoreQuiz.getTopic().isBlank()
+                        ? lowScoreQuiz.getQuizTitle()
+                        : lowScoreQuiz.getTopic()
+        );
+
+        if (addedTopics.contains(topic.toLowerCase())) {
+            return priority;
+        }
+
+        recommendations.add(new ReviewRecommendationItemResponse(
+                "LOW_SCORE_QUIZ",
+                topic,
+                lowScoreQuiz.getQuizId(),
+                null,
+                "Your latest low-score quiz for this topic was "
+                        + safeDouble(lowScoreQuiz.getScore()) + "%.",
+                priority,
+                "Retake the quiz or review the related notes."
+        ));
+
+        addedTopics.add(topic.toLowerCase());
+
+        return priority + 1;
+    }
+
+    private void addDocumentPracticeRecommendation(
+            Long userId,
+            Long courseId,
+            List<ReviewRecommendationItemResponse> recommendations,
+            int priority
+    ) {
+        DocumentReviewCandidate document =
+                progressRecommendationMapper.findRecentReadyDocumentWithoutQuizAttempt(
+                        userId,
+                        courseId
+                );
+
+        if (document == null) {
+            return;
+        }
+
+        recommendations.add(new ReviewRecommendationItemResponse(
+                "DOCUMENT_NEEDS_PRACTICE",
+                null,
+                null,
+                document.getDocumentId(),
+                "The document \"" + document.getFileName()
+                        + "\" is ready but has no quiz attempt yet.",
+                priority,
+                "Generate a quiz for this document and submit your first attempt."
+        ));
+    }
+
+    private String normalizeTopic(String topic) {
+        if (topic == null || topic.isBlank()) {
+            return "General";
+        }
+
+        return topic.trim();
     }
 
     private double calculateProgressScore(

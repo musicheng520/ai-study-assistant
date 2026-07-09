@@ -1,6 +1,7 @@
 package com.msc.springai.controller;
 
 import com.msc.springai.dto.learning.response.CourseProgressResponse;
+import com.msc.springai.dto.learning.response.CourseReviewRecommendationsResponse;
 import com.msc.springai.dto.learning.response.CourseWeakTopicsResponse;
 import com.msc.springai.dto.learning.response.UserProgressOverviewResponse;
 import com.msc.springai.security.CurrentUserUtil;
@@ -44,4 +45,17 @@ public class ProgressController {
                 courseId
         );
     }
+
+    @GetMapping("/api/courses/{courseId}/progress/recommendations")
+    public CourseReviewRecommendationsResponse getCourseRecommendations(
+            @PathVariable Long courseId
+    ) {
+        Long currentUserId = CurrentUserUtil.getCurrentUserId();
+
+        return progressService.getCourseRecommendations(
+                currentUserId,
+                courseId
+        );
+    }
+
 }
