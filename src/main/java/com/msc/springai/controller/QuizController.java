@@ -2,12 +2,11 @@ package com.msc.springai.controller;
 
 import com.msc.springai.dto.learning.request.QuizGenerateRequest;
 import com.msc.springai.dto.learning.request.SaveDraftRequest;
-import com.msc.springai.dto.learning.response.QuizDetailResponse;
-import com.msc.springai.dto.learning.response.QuizGenerateResponse;
-import com.msc.springai.dto.learning.response.QuizSaveResponse;
-import com.msc.springai.dto.learning.response.SavedQuizResponse;
+import com.msc.springai.dto.learning.request.SubmitQuizRequest;
+import com.msc.springai.dto.learning.response.*;
 import com.msc.springai.security.CurrentUserUtil;
 import com.msc.springai.service.QuizService;
+import com.msc.springai.service.QuizSubmitService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,6 +18,7 @@ import java.util.Map;
 public class QuizController {
 
     private final QuizService quizService;
+    private final QuizSubmitService quizSubmitService;
 
     @PostMapping("/api/courses/{courseId}/quiz/generate")
     public QuizGenerateResponse generateCourseQuiz(
@@ -98,6 +98,32 @@ public class QuizController {
         return Map.of(
                 "deleted", true,
                 "quizId", quizId
+        );
+    }
+
+    @PostMapping("/api/quiz/{quizId}/submit")
+    public QuizSubmitResponse submitQuiz(
+            @PathVariable Long quizId,
+            @RequestBody SubmitQuizRequest request
+    ) {
+        Long currentUserId = CurrentUserUtil.getCurrentUserId();
+
+        return quizSubmitService.submitQuiz(
+                currentUserId,
+                quizId,
+                request
+        );
+    }
+
+    @GetMapping("/api/quiz/{quizId}/attempts")
+    public List<QuizAttemptResponse> getQuizAttempts(
+            @PathVariable Long quizId
+    ) {
+        Long currentUserId = CurrentUserUtil.getCurrentUserId();
+
+        return quizSubmitService.getQuizAttempts(
+                currentUserId,
+                quizId
         );
     }
 }
