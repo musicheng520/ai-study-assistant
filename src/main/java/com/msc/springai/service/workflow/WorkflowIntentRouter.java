@@ -1,4 +1,4 @@
-package com.msc.springai.service;
+package com.msc.springai.service.workflow;
 
 import com.msc.springai.entity.WorkflowType;
 import org.springframework.stereotype.Service;
