@@ -60,3 +60,25 @@ CREATE TABLE IF NOT EXISTS study_tasks (
     INDEX idx_study_tasks_source_type (source_type),
     INDEX idx_study_tasks_due_date (due_date)
     );
+
+CREATE TABLE IF NOT EXISTS revision_packs (
+                                              id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                                              user_id BIGINT NOT NULL,
+                                              course_id BIGINT NOT NULL,
+
+                                              title VARCHAR(255) NOT NULL,
+    summary MEDIUMTEXT NOT NULL,
+
+    weak_topics_json JSON NOT NULL,
+    review_order_json JSON NOT NULL,
+    recommended_actions_json JSON NOT NULL,
+    related_documents_json JSON NOT NULL,
+    study_tasks_json JSON NOT NULL,
+    suggested_flashcards_json JSON NULL,
+
+    generated_quiz_id BIGINT NULL,
+    created_at DATETIME NOT NULL,
+
+    INDEX idx_revision_packs_user_course (user_id, course_id),
+    INDEX idx_revision_packs_created_at (created_at)
+    );
