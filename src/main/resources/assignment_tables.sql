@@ -37,3 +37,26 @@ CREATE TABLE IF NOT EXISTS rubric_analyses (
     INDEX idx_rubric_analyses_document (document_id),
     INDEX idx_rubric_analyses_created_at (created_at)
     );
+
+
+CREATE TABLE IF NOT EXISTS study_tasks (
+                                           id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                                           user_id BIGINT NOT NULL,
+                                           course_id BIGINT NOT NULL,
+                                           document_id BIGINT NULL,
+
+                                           title VARCHAR(255) NOT NULL,
+    description TEXT NULL,
+    status VARCHAR(30) NOT NULL,
+    due_date DATETIME NULL,
+    source_type VARCHAR(50) NOT NULL,
+
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+
+    INDEX idx_study_tasks_user_course (user_id, course_id),
+    INDEX idx_study_tasks_document (document_id),
+    INDEX idx_study_tasks_status (status),
+    INDEX idx_study_tasks_source_type (source_type),
+    INDEX idx_study_tasks_due_date (due_date)
+    );
