@@ -89,4 +89,24 @@ public interface RubricAnalysisMapper {
                               @Param("targetId") Long targetId,
                               @Param("topic") String topic,
                               @Param("createdAt") LocalDateTime createdAt);
+
+    @Select("""
+    SELECT
+        id,
+        user_id AS userId,
+        course_id AS courseId,
+        document_id AS documentId,
+        criteria_json AS criteriaJson,
+        excellent_band_json AS excellentBandJson,
+        common_mistakes AS commonMistakes,
+        high_score_strategy AS highScoreStrategy,
+        created_at AS createdAt
+    FROM rubric_analyses
+    WHERE user_id = #{userId}
+      AND course_id = #{courseId}
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+""")
+    RubricAnalysis findLatestByCourseIdAndUserId(@Param("userId") Long userId,
+                                                 @Param("courseId") Long courseId);
 }

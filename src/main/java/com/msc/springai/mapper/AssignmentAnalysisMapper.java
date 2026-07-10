@@ -98,4 +98,27 @@ public interface AssignmentAnalysisMapper {
                               @Param("targetId") Long targetId,
                               @Param("topic") String topic,
                               @Param("createdAt") LocalDateTime createdAt);
+    @Select("""
+    SELECT
+        id,
+        user_id AS userId,
+        course_id AS courseId,
+        document_id AS documentId,
+        requirements_json AS requirementsJson,
+        deliverables_json AS deliverablesJson,
+        deadline,
+        checklist_json AS checklistJson,
+        high_score_tips AS highScoreTips,
+        suggested_structure_json AS suggestedStructureJson,
+        risk_warnings_json AS riskWarningsJson,
+        created_at AS createdAt
+    FROM assignment_analyses
+    WHERE user_id = #{userId}
+      AND course_id = #{courseId}
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+""")
+    AssignmentAnalysis findLatestByCourseIdAndUserId(@Param("userId") Long userId,
+                                                     @Param("courseId") Long courseId);
+
 }

@@ -166,4 +166,15 @@ public interface StudyTaskMapper {
                               @Param("targetId") Long targetId,
                               @Param("topic") String topic,
                               @Param("createdAt") LocalDateTime createdAt);
+
+    @Select("""
+    SELECT COUNT(*)
+    FROM study_tasks
+    WHERE user_id = #{userId}
+      AND course_id = #{courseId}
+      AND title = #{title}
+""")
+    int countByTitle(@Param("userId") Long userId,
+                     @Param("courseId") Long courseId,
+                     @Param("title") String title);
 }

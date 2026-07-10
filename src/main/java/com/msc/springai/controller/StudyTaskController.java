@@ -1,8 +1,6 @@
 package com.msc.springai.controller;
 
-import com.msc.springai.dto.workflow.task.CreateStudyTaskRequest;
-import com.msc.springai.dto.workflow.task.StudyTaskResponse;
-import com.msc.springai.dto.workflow.task.UpdateStudyTaskRequest;
+import com.msc.springai.dto.workflow.task.*;
 import com.msc.springai.security.CurrentUserUtil;
 import com.msc.springai.service.StudyTaskService;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +21,20 @@ public class StudyTaskController {
         Long currentUserId = CurrentUserUtil.getCurrentUserId();
 
         return studyTaskService.createManualTask(
+                currentUserId,
+                courseId,
+                request
+        );
+    }
+
+    @PostMapping("/courses/{courseId}/tasks/generate")
+    public GenerateStudyTasksResponse generateTasks(
+            @PathVariable Long courseId,
+            @RequestBody(required = false) GenerateStudyTasksRequest request
+    ) {
+        Long currentUserId = CurrentUserUtil.getCurrentUserId();
+
+        return studyTaskService.generateTasks(
                 currentUserId,
                 courseId,
                 request
