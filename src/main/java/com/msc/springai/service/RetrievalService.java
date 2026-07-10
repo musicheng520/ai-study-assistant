@@ -2,11 +2,13 @@ package com.msc.springai.service;
 
 import com.msc.springai.dto.document.RedisChunkSearchResult;
 import com.msc.springai.dto.learning.retrieval.RetrievedChunk;
+import com.msc.springai.dto.workflow.tool.StudyToolDtos;
 import com.msc.springai.entity.Course;
 import com.msc.springai.entity.CourseDocument;
 import com.msc.springai.exception.BusinessException;
 import com.msc.springai.mapper.CourseDocumentMapper;
 import com.msc.springai.mapper.CourseMapper;
+import com.msc.springai.service.tool.DocumentSearchToolGateway;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -17,7 +19,7 @@ import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
-public class RetrievalService {
+public class RetrievalService implements DocumentSearchToolGateway {
 
     private static final String DOCUMENT_STATUS_READY = "READY";
 
@@ -28,6 +30,7 @@ public class RetrievalService {
     private final EmbeddingService embeddingService;
 
     private final RedisVectorService redisVectorService;
+
 
     @Value("${app.retrieval.default-top-k:8}")
     private Integer defaultTopK;
@@ -40,6 +43,7 @@ public class RetrievalService {
 
     @Value("${app.retrieval.document-generation-query:Summarize the main topics from this document.}")
     private String documentGenerationQuery;
+
 
     public List<RetrievedChunk> retrieveCourseChunks(
             Long userId,
@@ -395,5 +399,60 @@ public class RetrievalService {
         }
 
         return query.trim();
+    }
+
+    @Override
+    public List<StudyToolDtos.DocumentSearchToolResult> searchFromVectorStore(
+            Long userId,
+            Long courseId,
+            String query,
+            int topK,
+            Long documentId
+    ) {
+        System.out.println("[RetrievalService] Start tool-level document search.");
+        System.out.println("[RetrievalService] userId = " + userId);
+        System.out.println("[RetrievalService] courseId = " + courseId);
+        System.out.println("[RetrievalService] documentId = " + documentId);
+        System.out.println("[RetrievalService] query = " + query);
+        System.out.println("[RetrievalService] topK = " + topK);
+
+        List<RetrievedChunk> chunks;
+
+        if (documentId == null) {
+            chunks = retrieveCourseChunks(
+                    userId,
+                    courseId,
+                    topK,
+                    query
+            );
+        } else {
+            chunks = retrieveDocumentChunks(
+                    userId,
+                    courseId,
+                    documentId,
+                    topK,
+                    query
+            );
+        }
+
+        return chunks.stream()
+                .map(this::toDocumentSearchToolResult)
+                .toList();
+    }
+
+    private StudyToolDtos.DocumentSearchToolResult toDocumentSearchToolResult(RetrievedChunk chunk) {
+        if (chunk == null) {
+            return null;
+        }
+
+        return new StudyToolDtos.DocumentSearchToolResult(
+                chunk.getChunkId(),
+                chunk.getDocumentId(),
+                chunk.getFileName(),
+                chunk.getPageNumber(),
+                chunk.getSectionTitle(),
+                chunk.getContent(),
+                chunk.getScore()
+        );
     }
 }
