@@ -1,4 +1,4 @@
-package com.msc.springai.service;
+package com.msc.springai.service.prompt;
 
 import com.msc.springai.dto.document.RedisChunkSearchResult;
 import org.springframework.stereotype.Service;

@@ -1,6 +1,7 @@
 package com.msc.springai.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msc.springai.constant.AiWorkflowTypes;
 import com.msc.springai.dto.learning.draft.FlashcardDraftValue;
 import com.msc.springai.dto.learning.request.FlashcardGenerateRequest;
 import com.msc.springai.dto.learning.request.SaveDraftRequest;
@@ -22,10 +23,14 @@ import com.msc.springai.mapper.CourseMapper;
 import com.msc.springai.mapper.FlashcardMapper;
 import com.msc.springai.mapper.LearningHistoryMapper;
 import com.msc.springai.mapper.WrongAnswerMapper;
+import com.msc.springai.service.observability.AiChatResponseUtil;
+import com.msc.springai.service.observability.AiRequestLogContext;
+import com.msc.springai.service.observability.AiRequestLogService;
 import com.msc.springai.service.prompt.FlashcardPromptBuilder;
 import com.msc.springai.service.validator.FlashcardOutputValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,6 +54,7 @@ public class FlashcardService {
 
     private final RetrievalService retrievalService;
     private final DraftCacheService draftCacheService;
+    private final AiRequestLogService aiRequestLogService;
     private final FlashcardOutputValidator flashcardOutputValidator;
     private final FlashcardPromptBuilder flashcardPromptBuilder;
 
@@ -71,45 +77,60 @@ public class FlashcardService {
                 courseId
         );
 
-        FlashcardGenerateOptions options = normalizeOptions(request);
+        FlashcardGenerateOptions options =
+                normalizeOptions(request);
 
-        List<RetrievedChunk> chunks = retrievalService.retrieveCourseChunks(
-                userId,
-                courseId,
-                options.topK(),
-                options.retrievalQuery()
-        );
+        List<RetrievedChunk> chunks =
+                retrievalService.retrieveCourseChunks(
+                        userId,
+                        courseId,
+                        options.topK(),
+                        options.retrievalQuery()
+                );
 
-        FlashcardResult result = generateFlashcardsFromChunks(
-                SCOPE_COURSE,
-                options.count(),
-                options.difficulty(),
-                chunks
-        );
+        FlashcardResult result =
+                generateFlashcardsFromChunks(
+                        userId,
+                        courseId,
+                        SCOPE_COURSE,
+                        options.count(),
+                        options.difficulty(),
+                        chunks
+                );
 
-        FlashcardDraftValue draftValue = new FlashcardDraftValue(
-                userId,
-                courseId,
-                null,
-                SCOPE_COURSE,
-                options.count(),
-                options.difficulty(),
-                result
-        );
+        FlashcardDraftValue draftValue =
+                new FlashcardDraftValue(
+                        userId,
+                        courseId,
+                        null,
+                        SCOPE_COURSE,
+                        options.count(),
+                        options.difficulty(),
+                        result
+                );
 
-        Map<String, Object> params = new LinkedHashMap<>();
+        Map<String, Object> params =
+                new LinkedHashMap<>();
+
         params.put("documentId", null);
         params.put("topK", options.topK());
-        params.put("retrievalQuery", options.retrievalQuery());
-        params.put("count", options.count());
-        params.put("difficulty", options.difficulty());
-
-        String draftKey = draftCacheService.buildFlashcardDraftKey(
-                userId,
-                courseId,
-                SCOPE_COURSE,
-                params
+        params.put(
+                "retrievalQuery",
+                options.retrievalQuery()
         );
+        params.put("count", options.count());
+        params.put(
+                "difficulty",
+                options.difficulty()
+        );
+
+        String draftKey =
+                draftCacheService.buildFlashcardDraftKey(
+                        userId,
+                        courseId,
+                        SCOPE_COURSE,
+                        params
+                );
 
         draftCacheService.saveDraft(
                 draftKey,
@@ -130,10 +151,11 @@ public class FlashcardService {
             Long documentId,
             FlashcardGenerateRequest request
     ) {
-        CourseDocument document = courseDocumentMapper.findByIdAndUserId(
-                documentId,
-                userId
-        );
+        CourseDocument document =
+                courseDocumentMapper.findByIdAndUserId(
+                        documentId,
+                        userId
+                );
 
         if (document == null) {
             throw new BusinessException(
@@ -144,46 +166,61 @@ public class FlashcardService {
 
         Long courseId = document.getCourseId();
 
-        FlashcardGenerateOptions options = normalizeOptions(request);
+        FlashcardGenerateOptions options =
+                normalizeOptions(request);
 
-        List<RetrievedChunk> chunks = retrievalService.retrieveDocumentChunks(
-                userId,
-                courseId,
-                documentId,
-                options.topK(),
-                options.retrievalQuery()
-        );
+        List<RetrievedChunk> chunks =
+                retrievalService.retrieveDocumentChunks(
+                        userId,
+                        courseId,
+                        documentId,
+                        options.topK(),
+                        options.retrievalQuery()
+                );
 
-        FlashcardResult result = generateFlashcardsFromChunks(
-                SCOPE_DOCUMENT,
-                options.count(),
-                options.difficulty(),
-                chunks
-        );
+        FlashcardResult result =
+                generateFlashcardsFromChunks(
+                        userId,
+                        courseId,
+                        SCOPE_DOCUMENT,
+                        options.count(),
+                        options.difficulty(),
+                        chunks
+                );
 
-        FlashcardDraftValue draftValue = new FlashcardDraftValue(
-                userId,
-                courseId,
-                documentId,
-                SCOPE_DOCUMENT,
-                options.count(),
-                options.difficulty(),
-                result
-        );
+        FlashcardDraftValue draftValue =
+                new FlashcardDraftValue(
+                        userId,
+                        courseId,
+                        documentId,
+                        SCOPE_DOCUMENT,
+                        options.count(),
+                        options.difficulty(),
+                        result
+                );
 
-        Map<String, Object> params = new LinkedHashMap<>();
+        Map<String, Object> params =
+                new LinkedHashMap<>();
+
         params.put("documentId", documentId);
         params.put("topK", options.topK());
-        params.put("retrievalQuery", options.retrievalQuery());
-        params.put("count", options.count());
-        params.put("difficulty", options.difficulty());
-
-        String draftKey = draftCacheService.buildFlashcardDraftKey(
-                userId,
-                courseId,
-                SCOPE_DOCUMENT,
-                params
+        params.put(
+                "retrievalQuery",
+                options.retrievalQuery()
         );
+        params.put("count", options.count());
+        params.put(
+                "difficulty",
+                options.difficulty()
+        );
+
+        String draftKey =
+                draftCacheService.buildFlashcardDraftKey(
+                        userId,
+                        courseId,
+                        SCOPE_DOCUMENT,
+                        params
+                );
 
         draftCacheService.saveDraft(
                 draftKey,
@@ -199,7 +236,8 @@ public class FlashcardService {
         );
     }
 
-    public WeakTopicFlashcardGenerateResponse generateFlashcardsFromWrongTopics(
+    public WeakTopicFlashcardGenerateResponse
+    generateFlashcardsFromWrongTopics(
             Long userId,
             Long courseId,
             WrongTopicFlashcardGenerateRequest request
@@ -209,19 +247,28 @@ public class FlashcardService {
                 courseId
         );
 
-        WrongTopicFlashcardOptions options = normalizeWrongTopicOptions(request);
+        WrongTopicFlashcardOptions options =
+                normalizeWrongTopicOptions(request);
 
-        List<WeakTopicResponse> weakTopics = wrongAnswerMapper.findWeakTopics(
-                userId,
-                courseId
-        );
+        List<WeakTopicResponse> weakTopics =
+                wrongAnswerMapper.findWeakTopics(
+                        userId,
+                        courseId
+                );
 
         List<String> topics = weakTopics.stream()
-                .filter(topic -> topic.getUnresolvedCount() != null)
-                .filter(topic -> topic.getUnresolvedCount() > 0)
+                .filter(topic ->
+                        topic.getUnresolvedCount() != null
+                )
+                .filter(topic ->
+                        topic.getUnresolvedCount() > 0
+                )
                 .limit(options.topicLimit())
                 .map(WeakTopicResponse::getTopic)
-                .filter(topic -> topic != null && !topic.isBlank())
+                .filter(topic ->
+                        topic != null
+                                && !topic.isBlank()
+                )
                 .map(String::trim)
                 .toList();
 
@@ -232,78 +279,155 @@ public class FlashcardService {
             );
         }
 
-        String retrievalQuery = String.join("; ", topics);
+        String retrievalQuery =
+                String.join("; ", topics);
 
-        List<RetrievedChunk> chunks = retrievalService.retrieveCourseChunks(
-                userId,
-                courseId,
-                options.topK(),
-                retrievalQuery
+        List<RetrievedChunk> chunks =
+                retrievalService.retrieveCourseChunks(
+                        userId,
+                        courseId,
+                        options.topK(),
+                        retrievalQuery
+                );
+
+        int expectedCardCount =
+                topics.size()
+                        * options.cardsPerTopic();
+
+        String prompt =
+                flashcardPromptBuilder
+                        .buildWeakTopicFlashcardPrompt(
+                                topics,
+                                options.cardsPerTopic(),
+                                options.difficulty(),
+                                chunks
+                        );
+
+        AiRequestLogContext logContext =
+                aiRequestLogService.start(
+                        userId,
+                        courseId,
+                        AiWorkflowTypes.FLASHCARD
+                );
+
+        aiRequestLogService.setRetrievedChunkCount(
+                logContext,
+                chunks == null
+                        ? 0
+                        : chunks.size()
         );
 
-        int expectedCardCount = topics.size() * options.cardsPerTopic();
+        try {
+            FlashcardResult result =
+                    callLlmForFlashcards(
+                            prompt,
+                            logContext
+                    );
 
-        String prompt = flashcardPromptBuilder.buildWeakTopicFlashcardPrompt(
-                topics,
-                options.cardsPerTopic(),
-                options.difficulty(),
-                chunks
-        );
+            ensureFlashcardDefaults(
+                    result,
+                    options.difficulty()
+            );
 
-        FlashcardResult result = callLlmForFlashcards(prompt);
+            normalizeWeakTopicCards(
+                    result,
+                    topics,
+                    options.difficulty()
+            );
 
-        ensureFlashcardDefaults(
-                result,
-                options.difficulty()
-        );
+            flashcardOutputValidator.validate(
+                    result,
+                    expectedCardCount
+            );
 
-        normalizeWeakTopicCards(
-                result,
-                topics,
-                options.difficulty()
-        );
+            FlashcardDraftValue draftValue =
+                    new FlashcardDraftValue(
+                            userId,
+                            courseId,
+                            null,
+                            SCOPE_WEAK_TOPIC,
+                            expectedCardCount,
+                            options.difficulty(),
+                            result
+                    );
 
-        flashcardOutputValidator.validate(
-                result,
-                expectedCardCount
-        );
+            Map<String, Object> params =
+                    new LinkedHashMap<>();
 
-        FlashcardDraftValue draftValue = new FlashcardDraftValue(
-                userId,
-                courseId,
-                null,
-                SCOPE_WEAK_TOPIC,
-                expectedCardCount,
-                options.difficulty(),
-                result
-        );
+            params.put(
+                    "topicLimit",
+                    options.topicLimit()
+            );
 
-        Map<String, Object> params = new LinkedHashMap<>();
-        params.put("topicLimit", options.topicLimit());
-        params.put("cardsPerTopic", options.cardsPerTopic());
-        params.put("difficulty", options.difficulty());
-        params.put("topK", options.topK());
-        params.put("topics", topics);
+            params.put(
+                    "cardsPerTopic",
+                    options.cardsPerTopic()
+            );
 
-        String draftKey = draftCacheService.buildFlashcardDraftKey(
-                userId,
-                courseId,
-                SCOPE_WEAK_TOPIC,
-                params
-        );
+            params.put(
+                    "difficulty",
+                    options.difficulty()
+            );
 
-        draftCacheService.saveDraft(
-                draftKey,
-                draftValue,
-                Duration.ofDays(7)
-        );
+            params.put(
+                    "topK",
+                    options.topK()
+            );
 
-        return new WeakTopicFlashcardGenerateResponse(
-                draftKey,
-                SOURCE_TYPE_QUIZ_WRONG_TOPIC,
-                topics,
-                result.getCards()
-        );
+            params.put(
+                    "topics",
+                    topics
+            );
+
+            String draftKey =
+                    draftCacheService
+                            .buildFlashcardDraftKey(
+                                    userId,
+                                    courseId,
+                                    SCOPE_WEAK_TOPIC,
+                                    params
+                            );
+
+            draftCacheService.saveDraft(
+                    draftKey,
+                    draftValue,
+                    Duration.ofDays(7)
+            );
+
+            /*
+             * LLM、JSON 解析、Validator 和
+             * Redis Draft 都成功后再记录成功。
+             */
+            aiRequestLogService.completeSuccess(
+                    logContext
+            );
+
+            return new WeakTopicFlashcardGenerateResponse(
+                    draftKey,
+                    SOURCE_TYPE_QUIZ_WRONG_TOPIC,
+                    topics,
+                    result.getCards()
+            );
+
+        } catch (BusinessException exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw exception;
+
+        } catch (Exception exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw new BusinessException(
+                    "AI_GENERATION_FAILED",
+                    "Failed to generate weak-topic flashcards."
+            );
+        }
     }
 
     @Transactional
@@ -437,55 +561,165 @@ public class FlashcardService {
     }
 
     private FlashcardResult generateFlashcardsFromChunks(
+            Long userId,
+            Long courseId,
             String sourceScope,
             int count,
             String difficulty,
             List<RetrievedChunk> chunks
     ) {
-        String prompt = flashcardPromptBuilder.buildFlashcardPrompt(
-                sourceScope,
-                count,
-                difficulty,
-                chunks
+        String prompt =
+                flashcardPromptBuilder
+                        .buildFlashcardPrompt(
+                                sourceScope,
+                                count,
+                                difficulty,
+                                chunks
+                        );
+
+        AiRequestLogContext logContext =
+                aiRequestLogService.start(
+                        userId,
+                        courseId,
+                        AiWorkflowTypes.FLASHCARD
+                );
+
+        aiRequestLogService.setRetrievedChunkCount(
+                logContext,
+                chunks == null
+                        ? 0
+                        : chunks.size()
         );
-
-        FlashcardResult result = callLlmForFlashcards(prompt);
-
-        ensureFlashcardDefaults(
-                result,
-                difficulty
-        );
-
-        flashcardOutputValidator.validate(
-                result,
-                count
-        );
-
-        return result;
-    }
-
-    private FlashcardResult callLlmForFlashcards(String prompt) {
-        System.out.println("[FlashcardService] Start calling LLM for flashcards.");
-        System.out.println("[FlashcardService] prompt length = " + prompt.length());
 
         try {
-            System.out.println("[FlashcardService] About to call LLM.");
+            FlashcardResult result =
+                    callLlmForFlashcards(
+                            prompt,
+                            logContext
+                    );
 
-            String raw = chatClientBuilder
-                    .build()
-                    .prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
+            ensureFlashcardDefaults(
+                    result,
+                    difficulty
+            );
 
-            System.out.println("[FlashcardService] LLM returned raw response.");
-            System.out.println("[FlashcardService] raw length = " + (raw == null ? 0 : raw.length()));
-            System.out.println("[FlashcardService] raw preview = " + (
-                    raw == null ? "null" : raw.substring(0, Math.min(raw.length(), 500))
-            ));
-            System.out.println("[FlashcardService] raw tail = " + (
-                    raw == null ? "null" : raw.substring(Math.max(0, raw.length() - 500))
-            ));
+            flashcardOutputValidator.validate(
+                    result,
+                    count
+            );
+
+            aiRequestLogService.completeSuccess(
+                    logContext
+            );
+
+            return result;
+
+        } catch (BusinessException exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw exception;
+
+        } catch (Exception exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw new BusinessException(
+                    "AI_GENERATION_FAILED",
+                    "Failed to generate flashcards. Please try again."
+            );
+        }
+    }
+
+    private FlashcardResult callLlmForFlashcards(
+            String prompt,
+            AiRequestLogContext logContext
+    ) {
+        System.out.println(
+                "[FlashcardService] Start calling LLM for flashcards."
+        );
+
+        System.out.println(
+                "[FlashcardService] prompt length = "
+                        + (prompt == null
+                        ? 0
+                        : prompt.length())
+        );
+
+        try {
+            System.out.println(
+                    "[FlashcardService] About to call LLM."
+            );
+
+            ChatResponse chatResponse =
+                    chatClientBuilder
+                            .build()
+                            .prompt()
+                            .user(prompt)
+                            .call()
+                            .chatResponse();
+
+            /*
+             * 从完整 ChatResponse 中提取：
+             *
+             * model name
+             * prompt tokens
+             * completion tokens
+             * total tokens
+             */
+            aiRequestLogService.captureResponseMetadata(
+                    logContext,
+                    chatResponse
+            );
+
+            String raw =
+                    AiChatResponseUtil.extractText(
+                            chatResponse
+                    );
+
+            System.out.println(
+                    "[FlashcardService] LLM returned raw response."
+            );
+
+            System.out.println(
+                    "[FlashcardService] raw length = "
+                            + (raw == null
+                            ? 0
+                            : raw.length())
+            );
+
+            System.out.println(
+                    "[FlashcardService] raw preview = "
+                            + (
+                            raw == null
+                                    ? "null"
+                                    : raw.substring(
+                                    0,
+                                    Math.min(
+                                            raw.length(),
+                                            500
+                                    )
+                            )
+                    )
+            );
+
+            System.out.println(
+                    "[FlashcardService] raw tail = "
+                            + (
+                            raw == null
+                                    ? "null"
+                                    : raw.substring(
+                                    Math.max(
+                                            0,
+                                            raw.length() - 500
+                                    )
+                            )
+                    )
+            );
 
             if (raw == null || raw.isBlank()) {
                 throw new BusinessException(
@@ -494,33 +728,62 @@ public class FlashcardService {
                 );
             }
 
-            String json = extractJson(raw);
+            String json =
+                    extractJson(raw);
 
-            FlashcardResult result = objectMapper.readValue(
-                    json,
-                    FlashcardResult.class
+            FlashcardResult result =
+                    objectMapper.readValue(
+                            json,
+                            FlashcardResult.class
+                    );
+
+            System.out.println(
+                    "[FlashcardService] Flashcard JSON parsed."
             );
-
-            System.out.println("[FlashcardService] Flashcard JSON parsed.");
 
             return result;
 
-        } catch (BusinessException e) {
-            throw e;
+        } catch (BusinessException exception) {
+            throw exception;
 
-        } catch (Exception e) {
-            System.out.println("[FlashcardService] Failed to generate flashcards.");
-            System.out.println("[FlashcardService] exception class = " + e.getClass().getName());
-            System.out.println("[FlashcardService] error message = " + e.getMessage());
+        } catch (Exception exception) {
+            System.out.println(
+                    "[FlashcardService] Failed to generate flashcards."
+            );
 
-            Throwable cause = e.getCause();
+            System.out.println(
+                    "[FlashcardService] exception class = "
+                            + exception
+                            .getClass()
+                            .getName()
+            );
+
+            System.out.println(
+                    "[FlashcardService] error message = "
+                            + exception.getMessage()
+            );
+
+            Throwable cause =
+                    exception.getCause();
+
             int level = 1;
 
             while (cause != null && level <= 5) {
-                System.out.println("[FlashcardService] cause " + level + " class = "
-                        + cause.getClass().getName());
-                System.out.println("[FlashcardService] cause " + level + " message = "
-                        + cause.getMessage());
+                System.out.println(
+                        "[FlashcardService] cause "
+                                + level
+                                + " class = "
+                                + cause
+                                .getClass()
+                                .getName()
+                );
+
+                System.out.println(
+                        "[FlashcardService] cause "
+                                + level
+                                + " message = "
+                                + cause.getMessage()
+                );
 
                 cause = cause.getCause();
                 level++;

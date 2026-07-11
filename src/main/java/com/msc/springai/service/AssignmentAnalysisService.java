@@ -3,6 +3,7 @@ package com.msc.springai.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msc.springai.constant.AiWorkflowTypes;
 import com.msc.springai.dto.learning.retrieval.RetrievedChunk;
 import com.msc.springai.dto.workflow.assignment.AssignmentAnalysisResponse;
 import com.msc.springai.dto.workflow.assignment.AssignmentAnalysisResult;
@@ -12,9 +13,13 @@ import com.msc.springai.entity.CourseDocument;
 import com.msc.springai.exception.BusinessException;
 import com.msc.springai.mapper.AssignmentAnalysisMapper;
 import com.msc.springai.mapper.CourseDocumentMapper;
+import com.msc.springai.service.observability.AiChatResponseUtil;
+import com.msc.springai.service.observability.AiRequestLogContext;
+import com.msc.springai.service.observability.AiRequestLogService;
 import com.msc.springai.service.validator.AssignmentAnalysisValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -34,10 +39,13 @@ public class AssignmentAnalysisService {
     private final RetrievalService retrievalService;
     private final AssignmentAnalysisValidator assignmentAnalysisValidator;
     private final ObjectMapper objectMapper;
+    private final AiRequestLogService aiRequestLogService;
 
-    public AssignmentAnalysisResponse analyzeAssignment(Long currentUserId,
-                                                        Long documentId,
-                                                        AssignmentAnalyzeRequest request) {
+    public AssignmentAnalysisResponse analyzeAssignment(
+            Long currentUserId,
+            Long documentId,
+            AssignmentAnalyzeRequest request
+    ) {
         if (currentUserId == null) {
             throw new BusinessException(
                     "UNAUTHORIZED",
@@ -52,10 +60,11 @@ public class AssignmentAnalysisService {
             );
         }
 
-        CourseDocument document = courseDocumentMapper.findByIdAndUserId(
-                documentId,
-                currentUserId
-        );
+        CourseDocument document =
+                courseDocumentMapper.findByIdAndUserId(
+                        documentId,
+                        currentUserId
+                );
 
         if (document == null) {
             throw new BusinessException(
@@ -66,70 +75,104 @@ public class AssignmentAnalysisService {
 
         validateDocument(document, request);
 
-        List<RetrievedChunk> chunks = retrievalService.retrieveDocumentChunks(
-                currentUserId,
-                document.getCourseId(),
-                documentId,
-                12,
-                "Extract assignment requirements, deliverables, deadline, checklist and high score advice from this assignment brief."
-        );
+        List<RetrievedChunk> chunks =
+                retrievalService.retrieveDocumentChunks(
+                        currentUserId,
+                        document.getCourseId(),
+                        documentId,
+                        12,
+                        """
+                        Extract assignment requirements, deliverables, deadline, \
+                        checklist and high score advice from this assignment brief.
+                        """
+                );
 
         String context = buildContext(chunks);
-
-        System.out.println("[AssignmentAnalysisService] context length = " + context.length());
-
         String prompt = buildPrompt(context);
 
-        System.out.println("[AssignmentAnalysisService] prompt length = " + prompt.length());
-        System.out.println("[AssignmentAnalysisService] Start LLM assignment analysis.");
+        AiRequestLogContext logContext =
+                aiRequestLogService.start(
+                        currentUserId,
+                        document.getCourseId(),
+                        AiWorkflowTypes.ASSIGNMENT_ANALYSIS
+                );
 
-        String rawContent;
+        aiRequestLogService.setRetrievedChunkCount(
+                logContext,
+                chunks.size()
+        );
 
         try {
-            rawContent = chatClientBuilder
-                    .build()
-                    .prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
+            ChatResponse chatResponse =
+                    chatClientBuilder
+                            .build()
+                            .prompt()
+                            .user(prompt)
+                            .call()
+                            .chatResponse();
 
-            System.out.println("[AssignmentAnalysisService] LLM raw content:");
-            System.out.println(rawContent);
-
-        } catch (Exception e) {
-            System.out.println("[AssignmentAnalysisService] LLM call failed.");
-            e.printStackTrace();
-
-            throw new BusinessException(
-                    "ASSIGNMENT_ANALYSIS_AI_FAILED",
-                    "Failed to generate assignment analysis: " + e.getMessage()
+            aiRequestLogService.captureResponseMetadata(
+                    logContext,
+                    chatResponse
             );
+
+            String rawContent =
+                    AiChatResponseUtil.extractText(
+                            chatResponse
+                    );
+
+            AssignmentAnalysisResult result =
+                    parseResult(rawContent);
+
+            assignmentAnalysisValidator.validate(result);
+
+            AssignmentAnalysis analysis = toEntity(
+                    currentUserId,
+                    document.getCourseId(),
+                    documentId,
+                    result
+            );
+
+            assignmentAnalysisMapper.insert(analysis);
+
+            assignmentAnalysisMapper.insertLearningHistory(
+                    currentUserId,
+                    document.getCourseId(),
+                    "ASSIGNMENT_ANALYSIS",
+                    "DOCUMENT",
+                    documentId,
+                    null,
+                    LocalDateTime.now()
+            );
+
+            aiRequestLogService.completeSuccess(
+                    logContext
+            );
+
+            return toResponse(analysis);
+
+        } catch (BusinessException exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw exception;
+
+        } catch (Exception exception) {
+            BusinessException wrappedException =
+                    new BusinessException(
+                            "ASSIGNMENT_ANALYSIS_FAILED",
+                            "Failed to analyze assignment. Please try again."
+                    );
+
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw wrappedException;
         }
-
-        AssignmentAnalysisResult result = parseResult(rawContent);
-
-        assignmentAnalysisValidator.validate(result);
-
-        AssignmentAnalysis analysis = toEntity(
-                currentUserId,
-                document.getCourseId(),
-                documentId,
-                result
-        );
-
-        assignmentAnalysisMapper.insert(analysis);
-
-        assignmentAnalysisMapper.insertLearningHistory(
-                currentUserId,
-                document.getCourseId(),
-                "ASSIGNMENT_ANALYSIS",
-                "DOCUMENT",
-                documentId,
-                null,
-                LocalDateTime.now()
-        );
-
-        return toResponse(analysis);
     }
 
     public List<AssignmentAnalysisResponse> getCourseAssignmentAnalyses(Long currentUserId,

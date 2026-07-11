@@ -1,6 +1,7 @@
 package com.msc.springai.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msc.springai.constant.AiWorkflowTypes;
 import com.msc.springai.dto.learning.draft.QuizDraftValue;
 import com.msc.springai.dto.learning.request.QuizGenerateRequest;
 import com.msc.springai.dto.learning.request.SaveDraftRequest;
@@ -14,10 +15,14 @@ import com.msc.springai.entity.Quiz;
 import com.msc.springai.entity.QuizQuestion;
 import com.msc.springai.exception.BusinessException;
 import com.msc.springai.mapper.*;
+import com.msc.springai.service.observability.AiChatResponseUtil;
+import com.msc.springai.service.observability.AiRequestLogContext;
+import com.msc.springai.service.observability.AiRequestLogService;
 import com.msc.springai.service.prompt.QuizPromptBuilder;
 import com.msc.springai.service.validator.QuizOutputValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,66 +49,128 @@ public class QuizService {
 
     private final ObjectMapper objectMapper;
     private final ChatClient.Builder chatClientBuilder;
+    private final AiRequestLogService aiRequestLogService;
 
     public QuizGenerateResponse generateCourseQuiz(
             Long userId,
             Long courseId,
             QuizGenerateRequest request
     ) {
-        QuizGenerateOptions options = normalizeOptions(request);
-
-        List<RetrievedChunk> chunks = retrievalService.retrieveCourseChunks(
+        validateCourseAccess(
                 userId,
-                courseId,
-                options.topK(),
-                options.retrievalQuery()
+                courseId
         );
 
-        QuizResult result = generateQuizFromChunks(
-                SCOPE_COURSE,
-                options.difficulty(),
-                options.mcqCount(),
-                options.shortAnswerCount(),
-                chunks
-        );
+        AiRequestLogContext logContext =
+                aiRequestLogService.start(
+                        userId,
+                        courseId,
+                        AiWorkflowTypes.QUIZ
+                );
 
-        QuizDraftValue draftValue = new QuizDraftValue(
-                userId,
-                courseId,
-                null,
-                SCOPE_COURSE,
-                options.mcqCount(),
-                options.shortAnswerCount(),
-                options.difficulty(),
-                result
-        );
+        try {
+            QuizGenerateOptions options =
+                    normalizeOptions(request);
 
-        Map<String, Object> params = new LinkedHashMap<>();
-        params.put("documentId", null);
-        params.put("topK", options.topK());
-        params.put("retrievalQuery", options.retrievalQuery());
-        params.put("mcqCount", options.mcqCount());
-        params.put("shortAnswerCount", options.shortAnswerCount());
-        params.put("difficulty", options.difficulty());
+            List<RetrievedChunk> chunks =
+                    retrievalService.retrieveCourseChunks(
+                            userId,
+                            courseId,
+                            options.topK(),
+                            options.retrievalQuery()
+                    );
 
-        String draftKey = draftCacheService.buildQuizDraftKey(
-                userId,
-                courseId,
-                SCOPE_COURSE,
-                params
-        );
+            aiRequestLogService.setRetrievedChunkCount(
+                    logContext,
+                    chunks == null
+                            ? 0
+                            : chunks.size()
+            );
 
-        draftCacheService.saveDraft(
-                draftKey,
-                draftValue,
-                Duration.ofDays(7)
-        );
+            QuizResult result =
+                    generateQuizFromChunks(
+                            SCOPE_COURSE,
+                            options.difficulty(),
+                            options.mcqCount(),
+                            options.shortAnswerCount(),
+                            chunks,
+                            logContext
+                    );
 
-        return toGenerateResponse(
-                draftKey,
-                SCOPE_COURSE,
-                result
-        );
+            QuizDraftValue draftValue =
+                    new QuizDraftValue(
+                            userId,
+                            courseId,
+                            null,
+                            SCOPE_COURSE,
+                            options.mcqCount(),
+                            options.shortAnswerCount(),
+                            options.difficulty(),
+                            result
+                    );
+
+            Map<String, Object> params =
+                    new LinkedHashMap<>();
+
+            params.put("documentId", null);
+            params.put("topK", options.topK());
+            params.put(
+                    "retrievalQuery",
+                    options.retrievalQuery()
+            );
+            params.put("mcqCount", options.mcqCount());
+            params.put(
+                    "shortAnswerCount",
+                    options.shortAnswerCount()
+            );
+            params.put(
+                    "difficulty",
+                    options.difficulty()
+            );
+
+            String draftKey =
+                    draftCacheService.buildQuizDraftKey(
+                            userId,
+                            courseId,
+                            SCOPE_COURSE,
+                            params
+                    );
+
+            draftCacheService.saveDraft(
+                    draftKey,
+                    draftValue,
+                    Duration.ofDays(7)
+            );
+
+            aiRequestLogService.completeSuccess(
+                    logContext
+            );
+
+            return toGenerateResponse(
+                    draftKey,
+                    SCOPE_COURSE,
+                    result
+            );
+
+        } catch (BusinessException exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw exception;
+
+        } catch (Exception exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw new BusinessException(
+                    "QUIZ_GENERATION_FAILED",
+                    "Failed to generate course quiz. Please try again."
+            );
+        }
     }
 
     public QuizGenerateResponse generateDocumentQuiz(
@@ -111,10 +178,11 @@ public class QuizService {
             Long documentId,
             QuizGenerateRequest request
     ) {
-        CourseDocument document = courseDocumentMapper.findByIdAndUserId(
-                documentId,
-                userId
-        );
+        CourseDocument document =
+                courseDocumentMapper.findByIdAndUserId(
+                        documentId,
+                        userId
+                );
 
         if (document == null) {
             throw new BusinessException(
@@ -125,61 +193,117 @@ public class QuizService {
 
         Long courseId = document.getCourseId();
 
-        QuizGenerateOptions options = normalizeOptions(request);
+        AiRequestLogContext logContext =
+                aiRequestLogService.start(
+                        userId,
+                        courseId,
+                        AiWorkflowTypes.QUIZ
+                );
 
-        List<RetrievedChunk> chunks = retrievalService.retrieveDocumentChunks(
-                userId,
-                courseId,
-                documentId,
-                options.topK(),
-                options.retrievalQuery()
-        );
+        try {
+            QuizGenerateOptions options =
+                    normalizeOptions(request);
 
-        QuizResult result = generateQuizFromChunks(
-                SCOPE_DOCUMENT,
-                options.difficulty(),
-                options.mcqCount(),
-                options.shortAnswerCount(),
-                chunks
-        );
+            List<RetrievedChunk> chunks =
+                    retrievalService.retrieveDocumentChunks(
+                            userId,
+                            courseId,
+                            documentId,
+                            options.topK(),
+                            options.retrievalQuery()
+                    );
 
-        QuizDraftValue draftValue = new QuizDraftValue(
-                userId,
-                courseId,
-                documentId,
-                SCOPE_DOCUMENT,
-                options.mcqCount(),
-                options.shortAnswerCount(),
-                options.difficulty(),
-                result
-        );
+            aiRequestLogService.setRetrievedChunkCount(
+                    logContext,
+                    chunks == null
+                            ? 0
+                            : chunks.size()
+            );
 
-        Map<String, Object> params = new LinkedHashMap<>();
-        params.put("documentId", documentId);
-        params.put("topK", options.topK());
-        params.put("retrievalQuery", options.retrievalQuery());
-        params.put("mcqCount", options.mcqCount());
-        params.put("shortAnswerCount", options.shortAnswerCount());
-        params.put("difficulty", options.difficulty());
+            QuizResult result =
+                    generateQuizFromChunks(
+                            SCOPE_DOCUMENT,
+                            options.difficulty(),
+                            options.mcqCount(),
+                            options.shortAnswerCount(),
+                            chunks,
+                            logContext
+                    );
 
-        String draftKey = draftCacheService.buildQuizDraftKey(
-                userId,
-                courseId,
-                SCOPE_DOCUMENT,
-                params
-        );
+            QuizDraftValue draftValue =
+                    new QuizDraftValue(
+                            userId,
+                            courseId,
+                            documentId,
+                            SCOPE_DOCUMENT,
+                            options.mcqCount(),
+                            options.shortAnswerCount(),
+                            options.difficulty(),
+                            result
+                    );
 
-        draftCacheService.saveDraft(
-                draftKey,
-                draftValue,
-                Duration.ofDays(7)
-        );
+            Map<String, Object> params =
+                    new LinkedHashMap<>();
 
-        return toGenerateResponse(
-                draftKey,
-                SCOPE_DOCUMENT,
-                result
-        );
+            params.put("documentId", documentId);
+            params.put("topK", options.topK());
+            params.put(
+                    "retrievalQuery",
+                    options.retrievalQuery()
+            );
+            params.put("mcqCount", options.mcqCount());
+            params.put(
+                    "shortAnswerCount",
+                    options.shortAnswerCount()
+            );
+            params.put(
+                    "difficulty",
+                    options.difficulty()
+            );
+
+            String draftKey =
+                    draftCacheService.buildQuizDraftKey(
+                            userId,
+                            courseId,
+                            SCOPE_DOCUMENT,
+                            params
+                    );
+
+            draftCacheService.saveDraft(
+                    draftKey,
+                    draftValue,
+                    Duration.ofDays(7)
+            );
+
+            aiRequestLogService.completeSuccess(
+                    logContext
+            );
+
+            return toGenerateResponse(
+                    draftKey,
+                    SCOPE_DOCUMENT,
+                    result
+            );
+
+        } catch (BusinessException exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw exception;
+
+        } catch (Exception exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw new BusinessException(
+                    "QUIZ_GENERATION_FAILED",
+                    "Failed to generate document quiz. Please try again."
+            );
+        }
     }
 
     @Transactional
@@ -187,9 +311,9 @@ public class QuizService {
             Long userId,
             SaveDraftRequest request
     ) {
-        if (request == null ||
-                request.getDraftKey() == null ||
-                request.getDraftKey().isBlank()) {
+        if (request == null
+                || request.getDraftKey() == null
+                || request.getDraftKey().isBlank()) {
             throw new BusinessException(
                     "INVALID_DRAFT_KEY",
                     "Draft key is required."
@@ -203,10 +327,11 @@ public class QuizService {
                 userId
         );
 
-        QuizDraftValue draft = draftCacheService.getDraft(
-                draftKey,
-                QuizDraftValue.class
-        );
+        QuizDraftValue draft =
+                draftCacheService.getDraft(
+                        draftKey,
+                        QuizDraftValue.class
+                );
 
         if (draft == null) {
             throw new BusinessException(
@@ -229,6 +354,7 @@ public class QuizService {
         );
 
         Quiz quiz = new Quiz();
+
         quiz.setUserId(userId);
         quiz.setCourseId(draft.getCourseId());
         quiz.setDocumentId(draft.getDocumentId());
@@ -241,10 +367,13 @@ public class QuizService {
 
         for (QuizQuestionResult item : result.getQuestions()) {
             QuizQuestion question = new QuizQuestion();
+
             question.setQuizId(quiz.getId());
             question.setQuestionType(item.getQuestionType());
             question.setQuestionText(item.getQuestionText());
-            question.setOptionsJson(toJson(item.getOptions()));
+            question.setOptionsJson(
+                    toJson(item.getOptions())
+            );
             question.setCorrectAnswer(item.getCorrectAnswer());
             question.setExplanation(item.getExplanation());
             question.setDifficulty(item.getDifficulty());
@@ -265,7 +394,9 @@ public class QuizService {
 
         draftCacheService.deleteDraft(draftKey);
 
-        return new QuizSaveResponse(quiz.getId());
+        return new QuizSaveResponse(
+                quiz.getId()
+        );
     }
 
     public List<SavedQuizResponse> getCourseQuizzes(
@@ -290,10 +421,11 @@ public class QuizService {
             Long userId,
             Long quizId
     ) {
-        Quiz quiz = quizMapper.findByIdAndUserId(
-                quizId,
-                userId
-        );
+        Quiz quiz =
+                quizMapper.findByIdAndUserId(
+                        quizId,
+                        userId
+                );
 
         if (quiz == null) {
             throw new BusinessException(
@@ -302,14 +434,17 @@ public class QuizService {
             );
         }
 
-        List<SavedQuizQuestionResponse> questions = quizQuestionMapper.findByQuizId(
-                        quizId
-                )
-                .stream()
-                .map(this::toSavedQuizQuestionResponse)
-                .toList();
+        List<SavedQuizQuestionResponse> questions =
+                quizQuestionMapper.findByQuizId(
+                                quizId
+                        )
+                        .stream()
+                        .map(this::toSavedQuizQuestionResponse)
+                        .toList();
 
-        QuizDetailResponse response = new QuizDetailResponse();
+        QuizDetailResponse response =
+                new QuizDetailResponse();
+
         response.setId(quiz.getId());
         response.setUserId(quiz.getUserId());
         response.setCourseId(quiz.getCourseId());
@@ -329,10 +464,11 @@ public class QuizService {
             Long userId,
             Long quizId
     ) {
-        Quiz quiz = quizMapper.findByIdAndUserId(
-                quizId,
-                userId
-        );
+        Quiz quiz =
+                quizMapper.findByIdAndUserId(
+                        quizId,
+                        userId
+                );
 
         if (quiz == null) {
             throw new BusinessException(
@@ -341,7 +477,9 @@ public class QuizService {
             );
         }
 
-        quizQuestionMapper.deleteByQuizId(quizId);
+        quizQuestionMapper.deleteByQuizId(
+                quizId
+        );
 
         quizMapper.deleteByIdAndUserId(
                 quizId,
@@ -354,17 +492,23 @@ public class QuizService {
             String difficulty,
             int mcqCount,
             int shortAnswerCount,
-            List<RetrievedChunk> chunks
+            List<RetrievedChunk> chunks,
+            AiRequestLogContext logContext
     ) {
-        String prompt = quizPromptBuilder.buildQuizPrompt(
-                sourceScope,
-                difficulty,
-                mcqCount,
-                shortAnswerCount,
-                chunks
-        );
+        String prompt =
+                quizPromptBuilder.buildQuizPrompt(
+                        sourceScope,
+                        difficulty,
+                        mcqCount,
+                        shortAnswerCount,
+                        chunks
+                );
 
-        QuizResult result = callLlmForQuiz(prompt);
+        QuizResult result =
+                callLlmForQuiz(
+                        prompt,
+                        logContext
+                );
 
         ensureQuizDefaults(
                 result,
@@ -380,28 +524,87 @@ public class QuizService {
         return result;
     }
 
-    private QuizResult callLlmForQuiz(String prompt) {
-        System.out.println("[QuizService] Start calling LLM for quiz.");
-        System.out.println("[QuizService] prompt length = " + prompt.length());
+    private QuizResult callLlmForQuiz(
+            String prompt,
+            AiRequestLogContext logContext
+    ) {
+        System.out.println(
+                "[QuizService] Start calling LLM for quiz."
+        );
+
+        System.out.println(
+                "[QuizService] prompt length = "
+                        + (
+                        prompt == null
+                                ? 0
+                                : prompt.length()
+                )
+        );
 
         try {
-            System.out.println("[QuizService] About to call LLM.");
+            System.out.println(
+                    "[QuizService] About to call LLM."
+            );
 
-            String raw = chatClientBuilder
-                    .build()
-                    .prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
+            ChatResponse chatResponse =
+                    chatClientBuilder
+                            .build()
+                            .prompt()
+                            .user(prompt)
+                            .call()
+                            .chatResponse();
 
-            System.out.println("[QuizService] LLM returned raw response.");
-            System.out.println("[QuizService] raw length = " + (raw == null ? 0 : raw.length()));
-            System.out.println("[QuizService] raw preview = " + (
-                    raw == null ? "null" : raw.substring(0, Math.min(raw.length(), 500))
-            ));
-            System.out.println("[QuizService] raw tail = " + (
-                    raw == null ? "null" : raw.substring(Math.max(0, raw.length() - 500))
-            ));
+            aiRequestLogService.captureResponseMetadata(
+                    logContext,
+                    chatResponse
+            );
+
+            String raw =
+                    AiChatResponseUtil.extractText(
+                            chatResponse
+                    );
+
+            System.out.println(
+                    "[QuizService] LLM returned raw response."
+            );
+
+            System.out.println(
+                    "[QuizService] raw length = "
+                            + (
+                            raw == null
+                                    ? 0
+                                    : raw.length()
+                    )
+            );
+
+            System.out.println(
+                    "[QuizService] raw preview = "
+                            + (
+                            raw == null
+                                    ? "null"
+                                    : raw.substring(
+                                    0,
+                                    Math.min(
+                                            raw.length(),
+                                            500
+                                    )
+                            )
+                    )
+            );
+
+            System.out.println(
+                    "[QuizService] raw tail = "
+                            + (
+                            raw == null
+                                    ? "null"
+                                    : raw.substring(
+                                    Math.max(
+                                            0,
+                                            raw.length() - 500
+                                    )
+                            )
+                    )
+            );
 
             if (raw == null || raw.isBlank()) {
                 throw new BusinessException(
@@ -410,33 +613,62 @@ public class QuizService {
                 );
             }
 
-            String json = extractJson(raw);
+            String json =
+                    extractJson(raw);
 
-            QuizResult result = objectMapper.readValue(
-                    json,
-                    QuizResult.class
+            QuizResult result =
+                    objectMapper.readValue(
+                            json,
+                            QuizResult.class
+                    );
+
+            System.out.println(
+                    "[QuizService] Quiz JSON parsed."
             );
-
-            System.out.println("[QuizService] Quiz JSON parsed.");
 
             return result;
 
-        } catch (BusinessException e) {
-            throw e;
+        } catch (BusinessException exception) {
+            throw exception;
 
-        } catch (Exception e) {
-            System.out.println("[QuizService] Failed to generate quiz.");
-            System.out.println("[QuizService] exception class = " + e.getClass().getName());
-            System.out.println("[QuizService] error message = " + e.getMessage());
+        } catch (Exception exception) {
+            System.out.println(
+                    "[QuizService] Failed to generate quiz."
+            );
 
-            Throwable cause = e.getCause();
+            System.out.println(
+                    "[QuizService] exception class = "
+                            + exception
+                            .getClass()
+                            .getName()
+            );
+
+            System.out.println(
+                    "[QuizService] error message = "
+                            + exception.getMessage()
+            );
+
+            Throwable cause =
+                    exception.getCause();
+
             int level = 1;
 
             while (cause != null && level <= 5) {
-                System.out.println("[QuizService] cause " + level + " class = "
-                        + cause.getClass().getName());
-                System.out.println("[QuizService] cause " + level + " message = "
-                        + cause.getMessage());
+                System.out.println(
+                        "[QuizService] cause "
+                                + level
+                                + " class = "
+                                + cause
+                                .getClass()
+                                .getName()
+                );
+
+                System.out.println(
+                        "[QuizService] cause "
+                                + level
+                                + " message = "
+                                + cause.getMessage()
+                );
 
                 cause = cause.getCause();
                 level++;
@@ -457,29 +689,45 @@ public class QuizService {
             return;
         }
 
-        if (result.getDifficulty() == null || result.getDifficulty().isBlank()) {
-            result.setDifficulty(difficulty);
+        if (result.getDifficulty() == null
+                || result.getDifficulty().isBlank()) {
+            result.setDifficulty(
+                    difficulty
+            );
         }
 
-        if (result.getTitle() == null || result.getTitle().isBlank()) {
-            result.setTitle("Generated Quiz");
+        if (result.getTitle() == null
+                || result.getTitle().isBlank()) {
+            result.setTitle(
+                    "Generated Quiz"
+            );
         }
 
         if (result.getQuestions() == null) {
-            result.setQuestions(new ArrayList<>());
+            result.setQuestions(
+                    new ArrayList<>()
+            );
         }
 
         for (QuizQuestionResult question : result.getQuestions()) {
-            if (question.getDifficulty() == null || question.getDifficulty().isBlank()) {
-                question.setDifficulty(difficulty);
+            if (question.getDifficulty() == null
+                    || question.getDifficulty().isBlank()) {
+                question.setDifficulty(
+                        difficulty
+                );
             }
 
-            if (question.getTopic() == null || question.getTopic().isBlank()) {
-                question.setTopic(result.getTitle());
+            if (question.getTopic() == null
+                    || question.getTopic().isBlank()) {
+                question.setTopic(
+                        result.getTitle()
+                );
             }
 
             if (question.getOptions() == null) {
-                question.setOptions(new ArrayList<>());
+                question.setOptions(
+                        new ArrayList<>()
+                );
             }
         }
     }
@@ -488,7 +736,10 @@ public class QuizService {
             Long userId,
             QuizDraftValue draft
     ) {
-        if (!Objects.equals(userId, draft.getUserId())) {
+        if (!Objects.equals(
+                userId,
+                draft.getUserId()
+        )) {
             throw new BusinessException(
                     "FORBIDDEN_DRAFT",
                     "You cannot save this quiz draft."
@@ -501,10 +752,11 @@ public class QuizService {
         );
 
         if (draft.getDocumentId() != null) {
-            CourseDocument document = courseDocumentMapper.findByIdAndUserId(
-                    draft.getDocumentId(),
-                    userId
-            );
+            CourseDocument document =
+                    courseDocumentMapper.findByIdAndUserId(
+                            draft.getDocumentId(),
+                            userId
+                    );
 
             if (document == null) {
                 throw new BusinessException(
@@ -513,7 +765,10 @@ public class QuizService {
                 );
             }
 
-            if (!Objects.equals(document.getCourseId(), draft.getCourseId())) {
+            if (!Objects.equals(
+                    document.getCourseId(),
+                    draft.getCourseId()
+            )) {
                 throw new BusinessException(
                         "DOCUMENT_ACCESS_DENIED",
                         "Document does not belong to this course."
@@ -526,10 +781,11 @@ public class QuizService {
             Long userId,
             Long courseId
     ) {
-        Course course = courseMapper.findByIdAndUserId(
-                courseId,
-                userId
-        );
+        Course course =
+                courseMapper.findByIdAndUserId(
+                        courseId,
+                        userId
+                );
 
         if (course == null) {
             throw new BusinessException(
@@ -539,33 +795,68 @@ public class QuizService {
         }
     }
 
-    private QuizGenerateOptions normalizeOptions(QuizGenerateRequest request) {
-        int topK = request == null || request.getTopK() == null
-                ? 1
-                : Math.max(1, Math.min(request.getTopK(), 5));
+    private QuizGenerateOptions normalizeOptions(
+            QuizGenerateRequest request
+    ) {
+        int topK =
+                request == null
+                        || request.getTopK() == null
+                        ? 1
+                        : Math.max(
+                        1,
+                        Math.min(
+                                request.getTopK(),
+                                5
+                        )
+                );
 
-        String retrievalQuery = request == null
-                ? null
-                : request.getRetrievalQuery();
+        String retrievalQuery =
+                request == null
+                        ? null
+                        : request.getRetrievalQuery();
 
-        int mcqCount = request == null || request.getMcqCount() == null
-                ? 2
-                : Math.max(0, Math.min(request.getMcqCount(), 5));
+        int mcqCount =
+                request == null
+                        || request.getMcqCount() == null
+                        ? 2
+                        : Math.max(
+                        0,
+                        Math.min(
+                                request.getMcqCount(),
+                                5
+                        )
+                );
 
-        int shortAnswerCount = request == null || request.getShortAnswerCount() == null
-                ? 1
-                : Math.max(0, Math.min(request.getShortAnswerCount(), 5));
+        int shortAnswerCount =
+                request == null
+                        || request.getShortAnswerCount() == null
+                        ? 1
+                        : Math.max(
+                        0,
+                        Math.min(
+                                request.getShortAnswerCount(),
+                                5
+                        )
+                );
 
         if (mcqCount + shortAnswerCount <= 0) {
             mcqCount = 2;
             shortAnswerCount = 1;
         }
 
-        String difficulty = request == null || request.getDifficulty() == null
-                ? "MEDIUM"
-                : request.getDifficulty().trim().toUpperCase();
+        String difficulty =
+                request == null
+                        || request.getDifficulty() == null
+                        ? "MEDIUM"
+                        : request.getDifficulty()
+                        .trim()
+                        .toUpperCase();
 
-        if (!Set.of("EASY", "MEDIUM", "HARD").contains(difficulty)) {
+        if (!Set.of(
+                "EASY",
+                "MEDIUM",
+                "HARD"
+        ).contains(difficulty)) {
             difficulty = "MEDIUM";
         }
 
@@ -578,7 +869,9 @@ public class QuizService {
         );
     }
 
-    private String extractJson(String raw) {
+    private String extractJson(
+            String raw
+    ) {
         String cleaned = raw.trim();
 
         if (cleaned.startsWith("```json")) {
@@ -590,7 +883,10 @@ public class QuizService {
         }
 
         if (cleaned.endsWith("```")) {
-            cleaned = cleaned.substring(0, cleaned.length() - 3).trim();
+            cleaned = cleaned.substring(
+                    0,
+                    cleaned.length() - 3
+            ).trim();
         }
 
         int start = cleaned.indexOf("{");
@@ -603,13 +899,21 @@ public class QuizService {
             );
         }
 
-        return cleaned.substring(start, end + 1);
+        return cleaned.substring(
+                start,
+                end + 1
+        );
     }
 
-    private String toJson(Object value) {
+    private String toJson(
+            Object value
+    ) {
         try {
-            return objectMapper.writeValueAsString(value);
-        } catch (Exception e) {
+            return objectMapper.writeValueAsString(
+                    value
+            );
+
+        } catch (Exception exception) {
             throw new BusinessException(
                     "JSON_SERIALIZATION_FAILED",
                     "Failed to serialize quiz options."
@@ -627,12 +931,16 @@ public class QuizService {
                 result.getTitle(),
                 result.getDifficulty(),
                 sourceScope,
-                result.getQuestions() == null ? 0 : result.getQuestions().size(),
+                result.getQuestions() == null
+                        ? 0
+                        : result.getQuestions().size(),
                 result.getQuestions()
         );
     }
 
-    private SavedQuizResponse toSavedQuizResponse(Quiz quiz) {
+    private SavedQuizResponse toSavedQuizResponse(
+            Quiz quiz
+    ) {
         return new SavedQuizResponse(
                 quiz.getId(),
                 quiz.getUserId(),

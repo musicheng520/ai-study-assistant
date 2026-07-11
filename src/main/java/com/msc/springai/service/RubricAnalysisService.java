@@ -3,6 +3,7 @@ package com.msc.springai.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msc.springai.constant.AiWorkflowTypes;
 import com.msc.springai.dto.learning.retrieval.RetrievedChunk;
 import com.msc.springai.dto.workflow.rubric.RubricAnalysisResponse;
 import com.msc.springai.dto.workflow.rubric.RubricAnalysisResult;
@@ -13,9 +14,13 @@ import com.msc.springai.entity.RubricAnalysis;
 import com.msc.springai.exception.BusinessException;
 import com.msc.springai.mapper.CourseDocumentMapper;
 import com.msc.springai.mapper.RubricAnalysisMapper;
+import com.msc.springai.service.observability.AiChatResponseUtil;
+import com.msc.springai.service.observability.AiRequestLogContext;
+import com.msc.springai.service.observability.AiRequestLogService;
 import com.msc.springai.service.validator.RubricAnalysisValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -34,10 +39,13 @@ public class RubricAnalysisService {
     private final RubricAnalysisValidator rubricAnalysisValidator;
     private final ObjectMapper objectMapper;
     private final ChatClient.Builder chatClientBuilder;
+    private final AiRequestLogService aiRequestLogService;
 
-    public RubricAnalysisResponse analyzeRubric(Long currentUserId,
-                                                Long documentId,
-                                                RubricAnalyzeRequest request) {
+    public RubricAnalysisResponse analyzeRubric(
+            Long currentUserId,
+            Long documentId,
+            RubricAnalyzeRequest request
+    ) {
         if (currentUserId == null) {
             throw new BusinessException(
                     "UNAUTHORIZED",
@@ -52,10 +60,11 @@ public class RubricAnalysisService {
             );
         }
 
-        CourseDocument document = courseDocumentMapper.findByIdAndUserId(
-                documentId,
-                currentUserId
-        );
+        CourseDocument document =
+                courseDocumentMapper.findByIdAndUserId(
+                        documentId,
+                        currentUserId
+                );
 
         if (document == null) {
             throw new BusinessException(
@@ -64,76 +73,151 @@ public class RubricAnalysisService {
             );
         }
 
-        validateDocument(document, request);
-
-        List<RetrievedChunk> chunks = retrievalService.retrieveDocumentChunks(
-                currentUserId,
-                document.getCourseId(),
-                documentId,
-                12,
-                "Extract rubric marking criteria, grade bands, excellent requirements, common mistakes and high score strategy."
+        validateDocument(
+                document,
+                request
         );
 
-        String context = buildContext(chunks);
-
-        System.out.println("[RubricAnalysisService] context length = " + context.length());
-
-        String prompt = buildPrompt(context);
-
-        System.out.println("[RubricAnalysisService] prompt length = " + prompt.length());
-        System.out.println("[RubricAnalysisService] Start LLM rubric analysis.");
-
-        String rawContent;
+        AiRequestLogContext logContext =
+                aiRequestLogService.start(
+                        currentUserId,
+                        document.getCourseId(),
+                        AiWorkflowTypes.RUBRIC_ANALYSIS
+                );
 
         try {
-            rawContent = chatClientBuilder
-                    .build()
-                    .prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
+            List<RetrievedChunk> chunks =
+                    retrievalService.retrieveDocumentChunks(
+                            currentUserId,
+                            document.getCourseId(),
+                            documentId,
+                            12,
+                            "Extract rubric marking criteria, grade bands, excellent requirements, common mistakes and high score strategy."
+                    );
 
-            System.out.println("[RubricAnalysisService] LLM raw content:");
+            aiRequestLogService.setRetrievedChunkCount(
+                    logContext,
+                    chunks == null
+                            ? 0
+                            : chunks.size()
+            );
+
+            String context =
+                    buildContext(chunks);
+
+            System.out.println(
+                    "[RubricAnalysisService] context length = "
+                            + context.length()
+            );
+
+            String prompt =
+                    buildPrompt(context);
+
+            System.out.println(
+                    "[RubricAnalysisService] prompt length = "
+                            + prompt.length()
+            );
+
+            System.out.println(
+                    "[RubricAnalysisService] Start LLM rubric analysis."
+            );
+
+            ChatResponse chatResponse =
+                    chatClientBuilder
+                            .build()
+                            .prompt()
+                            .user(prompt)
+                            .call()
+                            .chatResponse();
+
+            aiRequestLogService.captureResponseMetadata(
+                    logContext,
+                    chatResponse
+            );
+
+            String rawContent =
+                    AiChatResponseUtil.extractText(
+                            chatResponse
+                    );
+
+            System.out.println(
+                    "[RubricAnalysisService] LLM raw content:"
+            );
+
             System.out.println(rawContent);
 
-        } catch (Exception e) {
-            System.out.println("[RubricAnalysisService] LLM call failed.");
-            e.printStackTrace();
+            RubricAnalysisResult result =
+                    parseResult(rawContent);
+
+            rubricAnalysisValidator.validate(result);
+
+            RubricAnalysis analysis =
+                    toEntity(
+                            currentUserId,
+                            document.getCourseId(),
+                            documentId,
+                            result
+                    );
+
+            rubricAnalysisMapper.insert(analysis);
+
+            rubricAnalysisMapper.insertLearningHistory(
+                    currentUserId,
+                    document.getCourseId(),
+                    "RUBRIC_ANALYSIS",
+                    "DOCUMENT",
+                    documentId,
+                    null,
+                    LocalDateTime.now()
+            );
+
+            aiRequestLogService.completeSuccess(
+                    logContext
+            );
+
+            return toResponse(analysis);
+
+        } catch (BusinessException exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw exception;
+
+        } catch (Exception exception) {
+            System.out.println(
+                    "[RubricAnalysisService] Rubric analysis failed."
+            );
+
+            System.out.println(
+                    "[RubricAnalysisService] exception class = "
+                            + exception
+                            .getClass()
+                            .getName()
+            );
+
+            System.out.println(
+                    "[RubricAnalysisService] error message = "
+                            + exception.getMessage()
+            );
+
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
 
             throw new BusinessException(
-                    "RUBRIC_ANALYSIS_AI_FAILED",
-                    "Failed to generate rubric analysis: " + e.getMessage()
+                    "RUBRIC_ANALYSIS_FAILED",
+                    "Failed to generate rubric analysis. Please try again."
             );
         }
-
-        RubricAnalysisResult result = parseResult(rawContent);
-
-        rubricAnalysisValidator.validate(result);
-
-        RubricAnalysis analysis = toEntity(
-                currentUserId,
-                document.getCourseId(),
-                documentId,
-                result
-        );
-
-        rubricAnalysisMapper.insert(analysis);
-
-        rubricAnalysisMapper.insertLearningHistory(
-                currentUserId,
-                document.getCourseId(),
-                "RUBRIC_ANALYSIS",
-                "DOCUMENT",
-                documentId,
-                null,
-                LocalDateTime.now()
-        );
-
-        return toResponse(analysis);
     }
 
-    public List<RubricAnalysisResponse> getCourseRubricAnalyses(Long currentUserId,
-                                                                Long courseId) {
+    public List<RubricAnalysisResponse> getCourseRubricAnalyses(
+            Long currentUserId,
+            Long courseId
+    ) {
         if (currentUserId == null) {
             throw new BusinessException(
                     "UNAUTHORIZED",
@@ -148,10 +232,11 @@ public class RubricAnalysisService {
             );
         }
 
-        int count = rubricAnalysisMapper.countCourseOwnership(
-                currentUserId,
-                courseId
-        );
+        int count =
+                rubricAnalysisMapper.countCourseOwnership(
+                        currentUserId,
+                        courseId
+                );
 
         if (count == 0) {
             throw new BusinessException(
@@ -161,24 +246,38 @@ public class RubricAnalysisService {
         }
 
         return rubricAnalysisMapper
-                .findByCourseIdAndUserId(currentUserId, courseId)
+                .findByCourseIdAndUserId(
+                        currentUserId,
+                        courseId
+                )
                 .stream()
                 .map(this::toResponse)
                 .toList();
     }
 
-    private void validateDocument(CourseDocument document,
-                                  RubricAnalyzeRequest request) {
-        if (!DOCUMENT_STATUS_READY.equals(document.getStatus())) {
+    private void validateDocument(
+            CourseDocument document,
+            RubricAnalyzeRequest request
+    ) {
+        if (!DOCUMENT_STATUS_READY.equals(
+                document.getStatus()
+        )) {
             throw new BusinessException(
                     "DOCUMENT_NOT_READY",
                     "Document is not ready for rubric analysis."
             );
         }
 
-        boolean force = request != null && Boolean.TRUE.equals(request.getForce());
+        boolean force =
+                request != null
+                        && Boolean.TRUE.equals(
+                        request.getForce()
+                );
 
-        if (!force && !DOCUMENT_TYPE_RUBRIC.equals(document.getDocumentType())) {
+        if (!force
+                && !DOCUMENT_TYPE_RUBRIC.equals(
+                document.getDocumentType()
+        )) {
             throw new BusinessException(
                     "INVALID_DOCUMENT_TYPE",
                     "Only RUBRIC documents can be analyzed as rubrics. Use force=true to override."
@@ -186,7 +285,9 @@ public class RubricAnalysisService {
         }
     }
 
-    private String buildContext(List<RetrievedChunk> chunks) {
+    private String buildContext(
+            List<RetrievedChunk> chunks
+    ) {
         if (chunks == null || chunks.isEmpty()) {
             throw new BusinessException(
                     "NO_RELEVANT_CHUNKS",
@@ -194,10 +295,13 @@ public class RubricAnalysisService {
             );
         }
 
-        StringBuilder builder = new StringBuilder();
+        StringBuilder builder =
+                new StringBuilder();
 
         for (RetrievedChunk chunk : chunks) {
-            if (chunk == null || chunk.getContent() == null || chunk.getContent().isBlank()) {
+            if (chunk == null
+                    || chunk.getContent() == null
+                    || chunk.getContent().isBlank()) {
                 continue;
             }
 
@@ -210,16 +314,29 @@ public class RubricAnalysisService {
                     .append("\n");
         }
 
-        String context = builder.toString();
+        String context =
+                builder.toString();
+
+        if (context.isBlank()) {
+            throw new BusinessException(
+                    "NO_RELEVANT_CHUNKS",
+                    "No relevant chunks found for rubric analysis."
+            );
+        }
 
         if (context.length() > 15000) {
-            return context.substring(0, 15000);
+            return context.substring(
+                    0,
+                    15000
+            );
         }
 
         return context;
     }
 
-    private String buildPrompt(String context) {
+    private String buildPrompt(
+            String context
+    ) {
         return """
                 You are an AI study assistant for international students.
                 Analyze the following marking rubric.
@@ -257,7 +374,9 @@ public class RubricAnalysisService {
                 """.formatted(context);
     }
 
-    private RubricAnalysisResult parseResult(String rawContent) {
+    private RubricAnalysisResult parseResult(
+            String rawContent
+    ) {
         if (rawContent == null || rawContent.isBlank()) {
             throw new BusinessException(
                     "EMPTY_AI_OUTPUT",
@@ -265,12 +384,16 @@ public class RubricAnalysisService {
             );
         }
 
-        String json = extractJson(rawContent);
+        String json =
+                extractJson(rawContent);
 
         try {
-            return objectMapper.readValue(json, RubricAnalysisResult.class);
+            return objectMapper.readValue(
+                    json,
+                    RubricAnalysisResult.class
+            );
 
-        } catch (JsonProcessingException e) {
+        } catch (JsonProcessingException exception) {
             throw new BusinessException(
                     "INVALID_AI_JSON",
                     "AI rubric analysis output is not valid JSON."
@@ -278,17 +401,24 @@ public class RubricAnalysisService {
         }
     }
 
-    private String extractJson(String rawContent) {
-        String text = rawContent.trim();
+    private String extractJson(
+            String rawContent
+    ) {
+        String text =
+                rawContent.trim();
 
         if (text.startsWith("```")) {
-            text = text.replace("```json", "")
+            text = text
+                    .replace("```json", "")
                     .replace("```", "")
                     .trim();
         }
 
-        int start = text.indexOf("{");
-        int end = text.lastIndexOf("}");
+        int start =
+                text.indexOf("{");
+
+        int end =
+                text.lastIndexOf("}");
 
         if (start < 0 || end < start) {
             throw new BusinessException(
@@ -297,45 +427,76 @@ public class RubricAnalysisService {
             );
         }
 
-        return text.substring(start, end + 1);
+        return text.substring(
+                start,
+                end + 1
+        );
     }
 
-    private RubricAnalysis toEntity(Long userId,
-                                    Long courseId,
-                                    Long documentId,
-                                    RubricAnalysisResult result) {
-        RubricAnalysis analysis = new RubricAnalysis();
+    private RubricAnalysis toEntity(
+            Long userId,
+            Long courseId,
+            Long documentId,
+            RubricAnalysisResult result
+    ) {
+        RubricAnalysis analysis =
+                new RubricAnalysis();
 
         analysis.setUserId(userId);
         analysis.setCourseId(courseId);
         analysis.setDocumentId(documentId);
-        analysis.setCriteriaJson(toJson(result.getCriteria()));
-        analysis.setExcellentBandJson(toJson(result.getExcellentBand()));
-        analysis.setCommonMistakes(result.getCommonMistakes());
-        analysis.setHighScoreStrategy(result.getHighScoreStrategy());
-        analysis.setCreatedAt(LocalDateTime.now());
+
+        analysis.setCriteriaJson(
+                toJson(result.getCriteria())
+        );
+
+        analysis.setExcellentBandJson(
+                toJson(result.getExcellentBand())
+        );
+
+        analysis.setCommonMistakes(
+                result.getCommonMistakes()
+        );
+
+        analysis.setHighScoreStrategy(
+                result.getHighScoreStrategy()
+        );
+
+        analysis.setCreatedAt(
+                LocalDateTime.now()
+        );
 
         return analysis;
     }
 
-    private RubricAnalysisResponse toResponse(RubricAnalysis analysis) {
+    private RubricAnalysisResponse toResponse(
+            RubricAnalysis analysis
+    ) {
         return new RubricAnalysisResponse(
                 analysis.getId(),
                 analysis.getCourseId(),
                 analysis.getDocumentId(),
-                fromCriteriaJson(analysis.getCriteriaJson()),
-                fromStringListJson(analysis.getExcellentBandJson()),
+                fromCriteriaJson(
+                        analysis.getCriteriaJson()
+                ),
+                fromStringListJson(
+                        analysis.getExcellentBandJson()
+                ),
                 analysis.getCommonMistakes(),
                 analysis.getHighScoreStrategy(),
                 analysis.getCreatedAt()
         );
     }
 
-    private String toJson(Object value) {
+    private String toJson(
+            Object value
+    ) {
         try {
-            return objectMapper.writeValueAsString(value);
+            return objectMapper.writeValueAsString(
+                    value
+            );
 
-        } catch (JsonProcessingException e) {
+        } catch (JsonProcessingException exception) {
             throw new BusinessException(
                     "JSON_SERIALIZATION_FAILED",
                     "Failed to serialize rubric analysis data."
@@ -343,7 +504,9 @@ public class RubricAnalysisService {
         }
     }
 
-    private List<RubricCriterionResult> fromCriteriaJson(String json) {
+    private List<RubricCriterionResult> fromCriteriaJson(
+            String json
+    ) {
         if (json == null || json.isBlank()) {
             return List.of();
         }
@@ -355,12 +518,14 @@ public class RubricAnalysisService {
                     }
             );
 
-        } catch (JsonProcessingException e) {
+        } catch (JsonProcessingException exception) {
             return List.of();
         }
     }
 
-    private List<String> fromStringListJson(String json) {
+    private List<String> fromStringListJson(
+            String json
+    ) {
         if (json == null || json.isBlank()) {
             return List.of();
         }
@@ -372,7 +537,7 @@ public class RubricAnalysisService {
                     }
             );
 
-        } catch (JsonProcessingException e) {
+        } catch (JsonProcessingException exception) {
             return List.of();
         }
     }

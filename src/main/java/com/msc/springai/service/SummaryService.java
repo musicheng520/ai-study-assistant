@@ -1,6 +1,7 @@
 package com.msc.springai.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msc.springai.constant.AiWorkflowTypes;
 import com.msc.springai.dto.learning.draft.SummaryDraftValue;
 import com.msc.springai.dto.learning.request.SaveDraftRequest;
 import com.msc.springai.dto.learning.request.SummaryGenerateRequest;
@@ -17,13 +18,16 @@ import com.msc.springai.mapper.CourseDocumentMapper;
 import com.msc.springai.mapper.CourseMapper;
 import com.msc.springai.mapper.LearningHistoryMapper;
 import com.msc.springai.mapper.SummaryMapper;
+import com.msc.springai.service.observability.AiChatResponseUtil;
+import com.msc.springai.service.observability.AiRequestLogContext;
+import com.msc.springai.service.observability.AiRequestLogService;
 import com.msc.springai.service.prompt.SummaryPromptBuilder;
 import com.msc.springai.service.validator.SummaryOutputValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +60,8 @@ public class SummaryService {
 
     private final ChatClient.Builder chatClientBuilder;
 
+    private final AiRequestLogService aiRequestLogService;
+
     public SummaryGenerateResponse generateCourseSummary(
             Long userId,
             Long courseId,
@@ -65,52 +71,105 @@ public class SummaryService {
         System.out.println("[SummaryService] userId = " + userId);
         System.out.println("[SummaryService] courseId = " + courseId);
 
-        int topK = normalizeTopK(request == null ? null : request.getTopK());
-        String retrievalQuery = request == null ? null : request.getRetrievalQuery();
+        AiRequestLogContext logContext =
+                aiRequestLogService.start(
+                        userId,
+                        courseId,
+                        AiWorkflowTypes.SUMMARY
+                );
 
-        List<RetrievedChunk> chunks = retrievalService.retrieveCourseChunks(
-                userId,
-                courseId,
-                topK,
-                retrievalQuery
-        );
+        try {
+            int topK =
+                    normalizeTopK(
+                            request == null
+                                    ? null
+                                    : request.getTopK()
+                    );
 
-        SummaryResult result = generateSummaryFromChunks(
-                SOURCE_SCOPE_COURSE,
-                chunks
-        );
+            String retrievalQuery =
+                    request == null
+                            ? null
+                            : request.getRetrievalQuery();
 
-        SummaryDraftValue draftValue = new SummaryDraftValue(
-                userId,
-                courseId,
-                null,
-                SOURCE_SCOPE_COURSE,
-                result
-        );
+            List<RetrievedChunk> chunks =
+                    retrievalService.retrieveCourseChunks(
+                            userId,
+                            courseId,
+                            topK,
+                            retrievalQuery
+                    );
 
-        String draftKey = draftCacheService.buildSummaryDraftKey(
-                userId,
-                courseId,
-                SOURCE_SCOPE_COURSE,
-                buildDraftParams(
-                        null,
-                        topK,
-                        retrievalQuery
-                )
-        );
+            aiRequestLogService.setRetrievedChunkCount(
+                    logContext,
+                    chunks == null
+                            ? 0
+                            : chunks.size()
+            );
 
-        draftCacheService.saveDraft(
-                draftKey,
-                draftValue
-        );
+            SummaryResult result =
+                    generateSummaryFromChunks(
+                            SOURCE_SCOPE_COURSE,
+                            chunks,
+                            logContext
+                    );
 
-        System.out.println("[SummaryService] Course summary draft saved.");
-        System.out.println("[SummaryService] draftKey = " + draftKey);
+            SummaryDraftValue draftValue =
+                    new SummaryDraftValue(
+                            userId,
+                            courseId,
+                            null,
+                            SOURCE_SCOPE_COURSE,
+                            result
+                    );
 
-        return toGenerateResponse(
-                draftKey,
-                result
-        );
+            String draftKey =
+                    draftCacheService.buildSummaryDraftKey(
+                            userId,
+                            courseId,
+                            SOURCE_SCOPE_COURSE,
+                            buildDraftParams(
+                                    null,
+                                    topK,
+                                    retrievalQuery
+                            )
+                    );
+
+            draftCacheService.saveDraft(
+                    draftKey,
+                    draftValue
+            );
+
+            aiRequestLogService.completeSuccess(
+                    logContext
+            );
+
+            System.out.println("[SummaryService] Course summary draft saved.");
+            System.out.println("[SummaryService] draftKey = " + draftKey);
+
+            return toGenerateResponse(
+                    draftKey,
+                    result
+            );
+
+        } catch (BusinessException exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw exception;
+
+        } catch (Exception exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw new BusinessException(
+                    "SUMMARY_GENERATION_FAILED",
+                    "Failed to generate course summary. Please try again."
+            );
+        }
     }
 
     public SummaryGenerateResponse generateDocumentSummary(
@@ -122,10 +181,11 @@ public class SummaryService {
         System.out.println("[SummaryService] userId = " + userId);
         System.out.println("[SummaryService] documentId = " + documentId);
 
-        CourseDocument document = courseDocumentMapper.findByIdAndUserId(
-                documentId,
-                userId
-        );
+        CourseDocument document =
+                courseDocumentMapper.findByIdAndUserId(
+                        documentId,
+                        userId
+                );
 
         if (document == null) {
             throw new BusinessException(
@@ -136,53 +196,106 @@ public class SummaryService {
 
         Long courseId = document.getCourseId();
 
-        int topK = normalizeTopK(request == null ? null : request.getTopK());
-        String retrievalQuery = request == null ? null : request.getRetrievalQuery();
+        AiRequestLogContext logContext =
+                aiRequestLogService.start(
+                        userId,
+                        courseId,
+                        AiWorkflowTypes.SUMMARY
+                );
 
-        List<RetrievedChunk> chunks = retrievalService.retrieveDocumentChunks(
-                userId,
-                courseId,
-                documentId,
-                topK,
-                retrievalQuery
-        );
+        try {
+            int topK =
+                    normalizeTopK(
+                            request == null
+                                    ? null
+                                    : request.getTopK()
+                    );
 
-        SummaryResult result = generateSummaryFromChunks(
-                SOURCE_SCOPE_DOCUMENT,
-                chunks
-        );
+            String retrievalQuery =
+                    request == null
+                            ? null
+                            : request.getRetrievalQuery();
 
-        SummaryDraftValue draftValue = new SummaryDraftValue(
-                userId,
-                courseId,
-                documentId,
-                SOURCE_SCOPE_DOCUMENT,
-                result
-        );
+            List<RetrievedChunk> chunks =
+                    retrievalService.retrieveDocumentChunks(
+                            userId,
+                            courseId,
+                            documentId,
+                            topK,
+                            retrievalQuery
+                    );
 
-        String draftKey = draftCacheService.buildSummaryDraftKey(
-                userId,
-                courseId,
-                SOURCE_SCOPE_DOCUMENT,
-                buildDraftParams(
-                        documentId,
-                        topK,
-                        retrievalQuery
-                )
-        );
+            aiRequestLogService.setRetrievedChunkCount(
+                    logContext,
+                    chunks == null
+                            ? 0
+                            : chunks.size()
+            );
 
-        draftCacheService.saveDraft(
-                draftKey,
-                draftValue
-        );
+            SummaryResult result =
+                    generateSummaryFromChunks(
+                            SOURCE_SCOPE_DOCUMENT,
+                            chunks,
+                            logContext
+                    );
 
-        System.out.println("[SummaryService] Document summary draft saved.");
-        System.out.println("[SummaryService] draftKey = " + draftKey);
+            SummaryDraftValue draftValue =
+                    new SummaryDraftValue(
+                            userId,
+                            courseId,
+                            documentId,
+                            SOURCE_SCOPE_DOCUMENT,
+                            result
+                    );
 
-        return toGenerateResponse(
-                draftKey,
-                result
-        );
+            String draftKey =
+                    draftCacheService.buildSummaryDraftKey(
+                            userId,
+                            courseId,
+                            SOURCE_SCOPE_DOCUMENT,
+                            buildDraftParams(
+                                    documentId,
+                                    topK,
+                                    retrievalQuery
+                            )
+                    );
+
+            draftCacheService.saveDraft(
+                    draftKey,
+                    draftValue
+            );
+
+            aiRequestLogService.completeSuccess(
+                    logContext
+            );
+
+            System.out.println("[SummaryService] Document summary draft saved.");
+            System.out.println("[SummaryService] draftKey = " + draftKey);
+
+            return toGenerateResponse(
+                    draftKey,
+                    result
+            );
+
+        } catch (BusinessException exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw exception;
+
+        } catch (Exception exception) {
+            aiRequestLogService.completeFailure(
+                    logContext,
+                    exception
+            );
+
+            throw new BusinessException(
+                    "SUMMARY_GENERATION_FAILED",
+                    "Failed to generate document summary. Please try again."
+            );
+        }
     }
 
     public SummarySaveResponse saveSummary(
@@ -191,7 +304,9 @@ public class SummaryService {
     ) {
         System.out.println("[SummaryService] Start save summary.");
 
-        if (request == null || request.getDraftKey() == null || request.getDraftKey().isBlank()) {
+        if (request == null
+                || request.getDraftKey() == null
+                || request.getDraftKey().isBlank()) {
             throw new BusinessException(
                     "INVALID_DRAFT_KEY",
                     "Draft key is required."
@@ -205,10 +320,11 @@ public class SummaryService {
                 userId
         );
 
-        SummaryDraftValue draft = draftCacheService.getDraft(
-                draftKey,
-                SummaryDraftValue.class
-        );
+        SummaryDraftValue draft =
+                draftCacheService.getDraft(
+                        draftKey,
+                        SummaryDraftValue.class
+                );
 
         validateDraftValue(
                 userId,
@@ -226,8 +342,15 @@ public class SummaryService {
         summary.setDocumentId(draft.getDocumentId());
         summary.setTitle(result.getTitle());
         summary.setSummary(result.getSummary());
-        summary.setKeyConceptsJson(writeJson(result.getKeyConcepts()));
-        summary.setDefinitionsJson(writeJson(result.getDefinitions()));
+
+        summary.setKeyConceptsJson(
+                writeJson(result.getKeyConcepts())
+        );
+
+        summary.setDefinitionsJson(
+                writeJson(result.getDefinitions())
+        );
+
         summary.setRevisionNotes(result.getRevisionNotes());
         summary.setSourceScope(draft.getSourceScope());
 
@@ -254,7 +377,9 @@ public class SummaryService {
         System.out.println("[SummaryService] Summary saved.");
         System.out.println("[SummaryService] summaryId = " + summary.getId());
 
-        return new SummarySaveResponse(summary.getId());
+        return new SummarySaveResponse(
+                summary.getId()
+        );
     }
 
     public List<SavedSummaryResponse> getCourseSummaries(
@@ -265,10 +390,11 @@ public class SummaryService {
         System.out.println("[SummaryService] userId = " + userId);
         System.out.println("[SummaryService] courseId = " + courseId);
 
-        Course course = courseMapper.findByIdAndUserId(
-                courseId,
-                userId
-        );
+        Course course =
+                courseMapper.findByIdAndUserId(
+                        courseId,
+                        userId
+                );
 
         if (course == null) {
             throw new BusinessException(
@@ -277,15 +403,19 @@ public class SummaryService {
             );
         }
 
-        List<Summary> summaries = summaryMapper.findByUserIdAndCourseId(
-                userId,
-                courseId
-        );
+        List<Summary> summaries =
+                summaryMapper.findByUserIdAndCourseId(
+                        userId,
+                        courseId
+                );
 
-        List<SavedSummaryResponse> responses = new ArrayList<>();
+        List<SavedSummaryResponse> responses =
+                new ArrayList<>();
 
         for (Summary summary : summaries) {
-            responses.add(toSavedSummaryResponse(summary));
+            responses.add(
+                    toSavedSummaryResponse(summary)
+            );
         }
 
         return responses;
@@ -299,10 +429,11 @@ public class SummaryService {
         System.out.println("[SummaryService] userId = " + userId);
         System.out.println("[SummaryService] summaryId = " + summaryId);
 
-        Summary existing = summaryMapper.findByIdAndUserId(
-                summaryId,
-                userId
-        );
+        Summary existing =
+                summaryMapper.findByIdAndUserId(
+                        summaryId,
+                        userId
+                );
 
         if (existing == null) {
             throw new BusinessException(
@@ -311,10 +442,11 @@ public class SummaryService {
             );
         }
 
-        int deleted = summaryMapper.deleteByIdAndUserId(
-                summaryId,
-                userId
-        );
+        int deleted =
+                summaryMapper.deleteByIdAndUserId(
+                        summaryId,
+                        userId
+                );
 
         if (deleted <= 0) {
             throw new BusinessException(
@@ -328,17 +460,24 @@ public class SummaryService {
 
     private SummaryResult generateSummaryFromChunks(
             String sourceScope,
-            List<RetrievedChunk> chunks
+            List<RetrievedChunk> chunks,
+            AiRequestLogContext logContext
     ) {
-        String prompt = summaryPromptBuilder.buildSummaryPrompt(
-                sourceScope,
-                chunks
-        );
+        String prompt =
+                summaryPromptBuilder.buildSummaryPrompt(
+                        sourceScope,
+                        chunks
+                );
 
-        SummaryResult result = callLlmForSummary(prompt);
+        SummaryResult result =
+                callLlmForSummary(
+                        prompt,
+                        logContext
+                );
 
         /*
-         * sourceScope 是后端确定的，不让 LLM 决定。
+         * sourceScope 是后端确定的，
+         * 不让 LLM 决定。
          */
         result.setSourceScope(sourceScope);
 
@@ -347,25 +486,73 @@ public class SummaryService {
         return result;
     }
 
-    private SummaryResult callLlmForSummary(String prompt) {
-        System.out.println("[SummaryService] Start calling LLM for summary.");
-        System.out.println("[SummaryService] prompt length = " + prompt.length());
+    private SummaryResult callLlmForSummary(
+            String prompt,
+            AiRequestLogContext logContext
+    ) {
+        System.out.println(
+                "[SummaryService] Start calling LLM for summary."
+        );
+
+        System.out.println(
+                "[SummaryService] prompt length = "
+                        + (
+                        prompt == null
+                                ? 0
+                                : prompt.length()
+                )
+        );
 
         try {
-            System.out.println("[SummaryService] About to call LLM.");
+            System.out.println(
+                    "[SummaryService] About to call LLM."
+            );
 
-            String raw = chatClientBuilder
-                    .build()
-                    .prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
+            ChatResponse chatResponse =
+                    chatClientBuilder
+                            .build()
+                            .prompt()
+                            .user(prompt)
+                            .call()
+                            .chatResponse();
 
-            System.out.println("[SummaryService] LLM returned raw response.");
-            System.out.println("[SummaryService] raw length = " + (raw == null ? 0 : raw.length()));
-            System.out.println("[SummaryService] raw preview = " + (
-                    raw == null ? "null" : raw.substring(0, Math.min(raw.length(), 500))
-            ));
+            aiRequestLogService.captureResponseMetadata(
+                    logContext,
+                    chatResponse
+            );
+
+            String raw =
+                    AiChatResponseUtil.extractText(
+                            chatResponse
+                    );
+
+            System.out.println(
+                    "[SummaryService] LLM returned raw response."
+            );
+
+            System.out.println(
+                    "[SummaryService] raw length = "
+                            + (
+                            raw == null
+                                    ? 0
+                                    : raw.length()
+                    )
+            );
+
+            System.out.println(
+                    "[SummaryService] raw preview = "
+                            + (
+                            raw == null
+                                    ? "null"
+                                    : raw.substring(
+                                    0,
+                                    Math.min(
+                                            raw.length(),
+                                            500
+                                    )
+                            )
+                    )
+            );
 
             if (raw == null || raw.isBlank()) {
                 throw new BusinessException(
@@ -374,33 +561,61 @@ public class SummaryService {
                 );
             }
 
-            String json = extractJson(raw);
+            String json =
+                    extractJson(raw);
 
-            SummaryResult result = objectMapper.readValue(
-                    json,
-                    SummaryResult.class
+            SummaryResult result =
+                    objectMapper.readValue(
+                            json,
+                            SummaryResult.class
+                    );
+
+            System.out.println(
+                    "[SummaryService] Summary JSON parsed."
             );
-
-            System.out.println("[SummaryService] Summary JSON parsed.");
 
             return result;
 
-        } catch (BusinessException e) {
-            throw e;
+        } catch (BusinessException exception) {
+            throw exception;
 
-        } catch (Exception e) {
-            System.out.println("[SummaryService] Failed to generate summary.");
-            System.out.println("[SummaryService] exception class = " + e.getClass().getName());
-            System.out.println("[SummaryService] error message = " + e.getMessage());
+        } catch (Exception exception) {
+            System.out.println(
+                    "[SummaryService] Failed to generate summary."
+            );
 
-            Throwable cause = e.getCause();
+            System.out.println(
+                    "[SummaryService] exception class = "
+                            + exception
+                            .getClass()
+                            .getName()
+            );
+
+            System.out.println(
+                    "[SummaryService] error message = "
+                            + exception.getMessage()
+            );
+
+            Throwable cause = exception.getCause();
+
             int level = 1;
 
             while (cause != null && level <= 5) {
-                System.out.println("[SummaryService] cause " + level + " class = "
-                        + cause.getClass().getName());
-                System.out.println("[SummaryService] cause " + level + " message = "
-                        + cause.getMessage());
+                System.out.println(
+                        "[SummaryService] cause "
+                                + level
+                                + " class = "
+                                + cause
+                                .getClass()
+                                .getName()
+                );
+
+                System.out.println(
+                        "[SummaryService] cause "
+                                + level
+                                + " message = "
+                                + cause.getMessage()
+                );
 
                 cause = cause.getCause();
                 level++;
@@ -413,15 +628,9 @@ public class SummaryService {
         }
     }
 
-    private void sleepBeforeRetry() {
-        try {
-            Thread.sleep(1500);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private String extractJson(String raw) {
+    private String extractJson(
+            String raw
+    ) {
         String text = raw.trim();
 
         if (text.startsWith("```")) {
@@ -442,7 +651,10 @@ public class SummaryService {
             );
         }
 
-        return text.substring(start, end + 1);
+        return text.substring(
+                start,
+                end + 1
+        );
     }
 
     private void validateDraftValue(
@@ -463,10 +675,11 @@ public class SummaryService {
             );
         }
 
-        Course course = courseMapper.findByIdAndUserId(
-                draft.getCourseId(),
-                userId
-        );
+        Course course =
+                courseMapper.findByIdAndUserId(
+                        draft.getCourseId(),
+                        userId
+                );
 
         if (course == null) {
             throw new BusinessException(
@@ -476,10 +689,11 @@ public class SummaryService {
         }
 
         if (SOURCE_SCOPE_DOCUMENT.equals(draft.getSourceScope())) {
-            CourseDocument document = courseDocumentMapper.findByIdAndUserId(
-                    draft.getDocumentId(),
-                    userId
-            );
+            CourseDocument document =
+                    courseDocumentMapper.findByIdAndUserId(
+                            draft.getDocumentId(),
+                            userId
+                    );
 
             if (document == null) {
                 throw new BusinessException(
@@ -497,11 +711,15 @@ public class SummaryService {
         }
     }
 
-    private String writeJson(Object value) {
+    private String writeJson(
+            Object value
+    ) {
         try {
-            return objectMapper.writeValueAsString(value);
+            return objectMapper.writeValueAsString(
+                    value
+            );
 
-        } catch (Exception e) {
+        } catch (Exception exception) {
             throw new BusinessException(
                     "JSON_SERIALIZE_FAILED",
                     "Failed to serialize summary content."
@@ -514,22 +732,35 @@ public class SummaryService {
             Integer topK,
             String retrievalQuery
     ) {
-        Map<String, Object> params = new TreeMap<>();
+        Map<String, Object> params =
+                new TreeMap<>();
 
         if (documentId != null) {
-            params.put("documentId", documentId);
+            params.put(
+                    "documentId",
+                    documentId
+            );
         }
 
-        params.put("topK", topK);
+        params.put(
+                "topK",
+                topK
+        );
 
-        if (retrievalQuery != null && !retrievalQuery.isBlank()) {
-            params.put("retrievalQuery", retrievalQuery.trim());
+        if (retrievalQuery != null
+                && !retrievalQuery.isBlank()) {
+            params.put(
+                    "retrievalQuery",
+                    retrievalQuery.trim()
+            );
         }
 
         return params;
     }
 
-    private int normalizeTopK(Integer topK) {
+    private int normalizeTopK(
+            Integer topK
+    ) {
         if (topK == null) {
             return 3;
         }
@@ -538,7 +769,10 @@ public class SummaryService {
             return 1;
         }
 
-        return Math.min(topK, 8);
+        return Math.min(
+                topK,
+                8
+        );
     }
 
     private SummaryGenerateResponse toGenerateResponse(
@@ -556,7 +790,9 @@ public class SummaryService {
         );
     }
 
-    private SavedSummaryResponse toSavedSummaryResponse(Summary summary) {
+    private SavedSummaryResponse toSavedSummaryResponse(
+            Summary summary
+    ) {
         return new SavedSummaryResponse(
                 summary.getId(),
                 summary.getUserId(),

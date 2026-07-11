@@ -2,8 +2,13 @@ package com.msc.springai.service.grading;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msc.springai.constant.AiWorkflowTypes;
+import com.msc.springai.service.observability.AiChatResponseUtil;
+import com.msc.springai.service.observability.AiRequestLogContext;
+import com.msc.springai.service.observability.AiRequestLogService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
@@ -25,9 +30,43 @@ public class ShortAnswerGradingService {
     );
 
     private final ChatClient.Builder chatClientBuilder;
+
     private final ObjectMapper objectMapper;
 
+    private final AiRequestLogService aiRequestLogService;
+
+    /**
+     * 兼容旧调用方式。
+     *
+     * 这个方法不会写 ai_request_logs，
+     * 因为 ai_request_logs.user_id 是 NOT NULL，
+     * 没有 userId 就不能可靠记录日志。
+     */
     public boolean grade(
+            String questionText,
+            String userAnswer,
+            String correctAnswer,
+            String explanation
+    ) {
+        return grade(
+                null,
+                null,
+                questionText,
+                userAnswer,
+                correctAnswer,
+                explanation
+        );
+    }
+
+    /**
+     * 推荐新调用方式。
+     *
+     * 只有真正进入 LLM grading 时才记录 ai_request_logs。
+     * deterministic grading 和 fallback keyword grading 都不算 AI 请求。
+     */
+    public boolean grade(
+            Long userId,
+            Long courseId,
             String questionText,
             String userAnswer,
             String correctAnswer,
@@ -37,26 +76,52 @@ public class ShortAnswerGradingService {
             return false;
         }
 
-        Boolean deterministicResult = tryDeterministicGrade(
-                userAnswer,
-                correctAnswer
-        );
+        Boolean deterministicResult =
+                tryDeterministicGrade(
+                        userAnswer,
+                        correctAnswer
+                );
 
         if (deterministicResult != null) {
             return deterministicResult;
         }
 
+        AiRequestLogContext logContext =
+                createLogContextIfPossible(
+                        userId,
+                        courseId
+                );
+
         try {
-            return gradeWithLlm(
-                    questionText,
-                    userAnswer,
-                    correctAnswer,
-                    explanation
-            );
-        } catch (Exception e) {
+            boolean result =
+                    gradeWithLlm(
+                            questionText,
+                            userAnswer,
+                            correctAnswer,
+                            explanation,
+                            logContext
+                    );
+
+            if (logContext != null) {
+                aiRequestLogService.completeSuccess(
+                        logContext
+                );
+            }
+
+            return result;
+
+        } catch (Exception exception) {
             System.out.println("[ShortAnswerGradingService] LLM grading failed.");
             System.out.println("[ShortAnswerGradingService] fallback to keyword grading.");
-            System.out.println("[ShortAnswerGradingService] error = " + e.getMessage());
+            System.out.println("[ShortAnswerGradingService] error = "
+                    + exception.getMessage());
+
+            if (logContext != null) {
+                aiRequestLogService.completeFailure(
+                        logContext,
+                        exception
+                );
+            }
 
             return fallbackKeywordGrade(
                     userAnswer,
@@ -64,6 +129,33 @@ public class ShortAnswerGradingService {
                     explanation
             );
         }
+    }
+
+    private AiRequestLogContext createLogContextIfPossible(
+            Long userId,
+            Long courseId
+    ) {
+        /*
+         * ai_request_logs.user_id 是 NOT NULL。
+         * 所以只有调用方传入 userId 时才记录日志。
+         */
+        if (userId == null) {
+            return null;
+        }
+
+        AiRequestLogContext logContext =
+                aiRequestLogService.start(
+                        userId,
+                        courseId,
+                        AiWorkflowTypes.SHORT_ANSWER_GRADING
+                );
+
+        aiRequestLogService.setRetrievedChunkCount(
+                logContext,
+                0
+        );
+
+        return logContext;
     }
 
     private Boolean tryDeterministicGrade(
@@ -74,31 +166,38 @@ public class ShortAnswerGradingService {
             return null;
         }
 
-        String normalizedUserAnswer = normalizeText(userAnswer);
-        String normalizedCorrectAnswer = normalizeText(correctAnswer);
+        String normalizedUserAnswer =
+                normalizeText(userAnswer);
+
+        String normalizedCorrectAnswer =
+                normalizeText(correctAnswer);
 
         if (normalizedUserAnswer.isBlank()) {
             return false;
         }
 
-        if (normalizedUserAnswer.equals(normalizedCorrectAnswer)) {
+        if (normalizedUserAnswer.equals(
+                normalizedCorrectAnswer
+        )) {
             return true;
         }
 
         /*
          * 如果学生答案完整包含标准答案，直接判对。
-         * 例如：
+         *
          * correctAnswer = "automatic memory management"
          * userAnswer = "It means automatic memory management in Java."
          */
-        if (normalizedCorrectAnswer.length() >= 12 &&
-                normalizedUserAnswer.contains(normalizedCorrectAnswer)) {
+        if (normalizedCorrectAnswer.length() >= 12
+                && normalizedUserAnswer.contains(
+                normalizedCorrectAnswer
+        )) {
             return true;
         }
 
         /*
          * 太短的答案一般不能算简答题正确。
-         * 例如：
+         *
          * "yes"
          * "idk"
          * "A"
@@ -114,36 +213,65 @@ public class ShortAnswerGradingService {
             String questionText,
             String userAnswer,
             String correctAnswer,
-            String explanation
+            String explanation,
+            AiRequestLogContext logContext
     ) throws Exception {
-        String prompt = buildGradingPrompt(
-                questionText,
-                userAnswer,
-                correctAnswer,
-                explanation
-        );
+        String prompt =
+                buildGradingPrompt(
+                        questionText,
+                        userAnswer,
+                        correctAnswer,
+                        explanation
+                );
 
-        String raw = chatClientBuilder
-                .build()
-                .prompt()
-                .user(prompt)
-                .call()
-                .content();
+        ChatResponse chatResponse =
+                chatClientBuilder
+                        .build()
+                        .prompt()
+                        .user(prompt)
+                        .call()
+                        .chatResponse();
 
-        if (raw == null || raw.isBlank()) {
-            throw new IllegalStateException("LLM returned empty grading result.");
+        if (logContext != null) {
+            aiRequestLogService.captureResponseMetadata(
+                    logContext,
+                    chatResponse
+            );
         }
 
-        String json = extractJson(raw);
+        String raw =
+                AiChatResponseUtil.extractText(
+                        chatResponse
+                );
 
-        JsonNode node = objectMapper.readTree(json);
+        if (raw == null || raw.isBlank()) {
+            throw new IllegalStateException(
+                    "LLM returned empty grading result."
+            );
+        }
 
-        boolean modelCorrect = node.path("correct").asBoolean(false);
-        double score = node.path("score").asDouble(0.0);
+        String json =
+                extractJson(raw);
 
-        System.out.println("[ShortAnswerGradingService] modelCorrect = " + modelCorrect);
-        System.out.println("[ShortAnswerGradingService] score = " + score);
-        System.out.println("[ShortAnswerGradingService] reason = " + node.path("reason").asText(""));
+        JsonNode node =
+                objectMapper.readTree(json);
+
+        boolean modelCorrect =
+                node.path("correct")
+                        .asBoolean(false);
+
+        double score =
+                node.path("score")
+                        .asDouble(0.0);
+
+        System.out.println("[ShortAnswerGradingService] modelCorrect = "
+                + modelCorrect);
+
+        System.out.println("[ShortAnswerGradingService] score = "
+                + score);
+
+        System.out.println("[ShortAnswerGradingService] reason = "
+                + node.path("reason").asText(""));
 
         return modelCorrect && score >= PASSING_SCORE;
     }
@@ -206,61 +334,95 @@ public class ShortAnswerGradingService {
             return false;
         }
 
-        String referenceText = safe(correctAnswer) + " " + safe(explanation);
+        String referenceText =
+                safe(correctAnswer)
+                        + " "
+                        + safe(explanation);
 
-        Set<String> keywords = extractKeywords(referenceText);
+        Set<String> keywords =
+                extractKeywords(referenceText);
 
         if (keywords.isEmpty()) {
             return false;
         }
 
-        String normalizedUserAnswer = normalizeText(userAnswer);
+        String normalizedUserAnswer =
+                normalizeText(userAnswer);
 
-        long matchedCount = keywords.stream()
-                .filter(normalizedUserAnswer::contains)
-                .count();
+        long matchedCount =
+                keywords.stream()
+                        .filter(normalizedUserAnswer::contains)
+                        .count();
 
-        double ratio = matchedCount * 1.0 / keywords.size();
+        double ratio =
+                matchedCount * 1.0 / keywords.size();
 
         return matchedCount >= 2 && ratio >= 0.45;
     }
 
-    private Set<String> extractKeywords(String text) {
-        String normalized = normalizeText(text);
+    private Set<String> extractKeywords(
+            String text
+    ) {
+        String normalized =
+                normalizeText(text);
 
-        return Arrays.stream(normalized.split("\\s+"))
+        return Arrays.stream(
+                        normalized.split("\\s+")
+                )
                 .map(String::trim)
                 .filter(word -> word.length() >= 4)
                 .filter(word -> !STOP_WORDS.contains(word))
                 .collect(Collectors.toSet());
     }
 
-    private String extractJson(String raw) {
-        String cleaned = raw.trim();
+    private String extractJson(
+            String raw
+    ) {
+        String cleaned =
+                raw.trim();
 
         if (cleaned.startsWith("```json")) {
-            cleaned = cleaned.substring(7).trim();
+            cleaned = cleaned
+                    .substring(7)
+                    .trim();
         }
 
         if (cleaned.startsWith("```")) {
-            cleaned = cleaned.substring(3).trim();
+            cleaned = cleaned
+                    .substring(3)
+                    .trim();
         }
 
         if (cleaned.endsWith("```")) {
-            cleaned = cleaned.substring(0, cleaned.length() - 3).trim();
+            cleaned = cleaned
+                    .substring(
+                            0,
+                            cleaned.length() - 3
+                    )
+                    .trim();
         }
 
-        int start = cleaned.indexOf("{");
-        int end = cleaned.lastIndexOf("}");
+        int start =
+                cleaned.indexOf("{");
+
+        int end =
+                cleaned.lastIndexOf("}");
 
         if (start < 0 || end < 0 || end <= start) {
-            throw new IllegalStateException("LLM did not return valid JSON.");
+            throw new IllegalStateException(
+                    "LLM did not return valid JSON."
+            );
         }
 
-        return cleaned.substring(start, end + 1);
+        return cleaned.substring(
+                start,
+                end + 1
+        );
     }
 
-    private String normalizeText(String text) {
+    private String normalizeText(
+            String text
+    ) {
         if (text == null) {
             return "";
         }
@@ -272,23 +434,32 @@ public class ShortAnswerGradingService {
                 .trim();
     }
 
-    private boolean isBlank(String value) {
-        return value == null || value.trim().isEmpty();
+    private boolean isBlank(
+            String value
+    ) {
+        return value == null
+                || value.trim().isEmpty();
     }
 
-    private String safe(String value) {
+    private String safe(
+            String value
+    ) {
         if (value == null) {
             return "";
         }
 
-        String cleaned = value
-                .replaceAll("\\s+", " ")
-                .trim();
+        String cleaned =
+                value
+                        .replaceAll("\\s+", " ")
+                        .trim();
 
         if (cleaned.length() <= 1200) {
             return cleaned;
         }
 
-        return cleaned.substring(0, 1200) + "...";
+        return cleaned.substring(
+                0,
+                1200
+        ) + "...";
     }
 }
