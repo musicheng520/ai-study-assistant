@@ -1,19 +1,29 @@
 package com.msc.springai.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msc.springai.constant.LearningEventTypes;
+import com.msc.springai.constant.LearningTargetTypes;
 import com.msc.springai.dto.workflow.rubric.RubricCriterionResult;
-import com.msc.springai.dto.workflow.task.*;
-import com.msc.springai.entity.*;
+import com.msc.springai.dto.workflow.task.CreateStudyTaskRequest;
+import com.msc.springai.dto.workflow.task.GenerateStudyTasksRequest;
+import com.msc.springai.dto.workflow.task.GenerateStudyTasksResponse;
+import com.msc.springai.dto.workflow.task.StudyTaskResponse;
+import com.msc.springai.dto.workflow.task.UpdateStudyTaskRequest;
+import com.msc.springai.entity.AssignmentAnalysis;
+import com.msc.springai.entity.RubricAnalysis;
+import com.msc.springai.entity.StudyTask;
+import com.msc.springai.entity.StudyTaskSourceType;
+import com.msc.springai.entity.StudyTaskStatus;
 import com.msc.springai.exception.BusinessException;
 import com.msc.springai.mapper.AssignmentAnalysisMapper;
+import com.msc.springai.mapper.LearningHistoryMapper;
 import com.msc.springai.mapper.RubricAnalysisMapper;
 import com.msc.springai.mapper.StudyTaskMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -26,146 +36,175 @@ import java.util.Set;
 public class StudyTaskService {
 
     private final StudyTaskMapper studyTaskMapper;
+
     private final AssignmentAnalysisMapper assignmentAnalysisMapper;
+
     private final RubricAnalysisMapper rubricAnalysisMapper;
+
+    private final LearningHistoryMapper learningHistoryMapper;
+
     private final ObjectMapper objectMapper;
 
-    public StudyTaskResponse createManualTask(Long currentUserId,
-                                              Long courseId,
-                                              CreateStudyTaskRequest request) {
-        System.out.println("[StudyTaskService] ===== createManualTask START =====");
-        System.out.println("[StudyTaskService] currentUserId = " + currentUserId);
-        System.out.println("[StudyTaskService] courseId = " + courseId);
-        System.out.println("[StudyTaskService] request = " + request);
+    @Transactional
+    public StudyTaskResponse createManualTask(
+            Long currentUserId,
+            Long courseId,
+            CreateStudyTaskRequest request
+    ) {
+        validateCurrentUser(currentUserId);
+        validateCourseId(courseId);
+        validateCreateRequest(request);
 
-        try {
-            System.out.println("[StudyTaskService] Step 1: validate current user");
-            validateCurrentUser(currentUserId);
+        ensureCourseAccess(
+                currentUserId,
+                courseId
+        );
 
-            System.out.println("[StudyTaskService] Step 2: validate course id");
-            validateCourseId(courseId);
-
-            System.out.println("[StudyTaskService] Step 3: validate create request");
-            validateCreateRequest(request);
-
-            System.out.println("[StudyTaskService] Step 4: ensure course access");
-            ensureCourseAccess(currentUserId, courseId);
-            System.out.println("[StudyTaskService] Course access OK");
-
-            if (request.getDocumentId() != null) {
-                System.out.println("[StudyTaskService] Step 5: ensure document access");
-                System.out.println("[StudyTaskService] documentId = " + request.getDocumentId());
-
-                ensureDocumentAccess(currentUserId, courseId, request.getDocumentId());
-                System.out.println("[StudyTaskService] Document access OK");
-            } else {
-                System.out.println("[StudyTaskService] Step 5: documentId is null, skip document access check");
-            }
-
-            LocalDateTime now = LocalDateTime.now();
-            System.out.println("[StudyTaskService] Step 6: build task entity");
-            System.out.println("[StudyTaskService] now = " + now);
-
-            StudyTask task = new StudyTask();
-            task.setUserId(currentUserId);
-            task.setCourseId(courseId);
-            task.setDocumentId(request.getDocumentId());
-            task.setTitle(request.getTitle().trim());
-            task.setDescription(normalizeBlankToNull(request.getDescription()));
-            task.setStatus(StudyTaskStatus.TODO.name());
-            task.setDueDate(request.getDueDate());
-            task.setSourceType(StudyTaskSourceType.MANUAL.name());
-            task.setCreatedAt(now);
-            task.setUpdatedAt(now);
-
-            System.out.println("[StudyTaskService] task before insert = " + task);
-
-            System.out.println("[StudyTaskService] Step 7: insert study_tasks");
-            studyTaskMapper.insert(task);
-            System.out.println("[StudyTaskService] Task inserted successfully, taskId = " + task.getId());
-
-            System.out.println("[StudyTaskService] Step 8: insert learning_history");
-
-            studyTaskMapper.insertLearningHistory(
+        if (request.getDocumentId() != null) {
+            ensureDocumentAccess(
                     currentUserId,
                     courseId,
-                    "NOTE",
-                    "COURSE",
-                    courseId,
-                    null,
-                    now
+                    request.getDocumentId()
             );
-
-            System.out.println("[StudyTaskService] Learning history inserted successfully");
-
-            StudyTaskResponse response = toResponse(task);
-
-            System.out.println("[StudyTaskService] Step 9: response = " + response);
-            System.out.println("[StudyTaskService] ===== createManualTask SUCCESS =====");
-
-            return response;
-
-        } catch (Exception e) {
-            System.out.println("[StudyTaskService] ===== createManualTask FAILED =====");
-            System.out.println("[StudyTaskService] Error class = " + e.getClass().getName());
-            System.out.println("[StudyTaskService] Error message = " + e.getMessage());
-            e.printStackTrace();
-
-            throw e;
         }
+
+        LocalDateTime now =
+                LocalDateTime.now();
+
+        StudyTask task =
+                new StudyTask();
+
+        task.setUserId(currentUserId);
+        task.setCourseId(courseId);
+        task.setDocumentId(request.getDocumentId());
+        task.setTitle(request.getTitle().trim());
+        task.setDescription(
+                normalizeBlankToNull(
+                        request.getDescription()
+                )
+        );
+        task.setStatus(
+                StudyTaskStatus.TODO.name()
+        );
+        task.setDueDate(request.getDueDate());
+        task.setSourceType(
+                StudyTaskSourceType.MANUAL.name()
+        );
+        task.setCreatedAt(now);
+        task.setUpdatedAt(now);
+
+        studyTaskMapper.insert(task);
+
+        if (task.getId() == null) {
+            throw new BusinessException(
+                    "TASK_CREATE_FAILED",
+                    "Failed to create study task."
+            );
+        }
+
+        learningHistoryMapper.insertLearningHistory(
+                currentUserId,
+                courseId,
+                LearningEventTypes.TASK_CREATED,
+                LearningTargetTypes.STUDY_TASK,
+                task.getId(),
+                task.getTitle()
+        );
+
+        return toResponse(task);
     }
 
     @Transactional
-    public GenerateStudyTasksResponse generateTasks(Long currentUserId,
-                                                    Long courseId,
-                                                    GenerateStudyTasksRequest request) {
+    public GenerateStudyTasksResponse generateTasks(
+            Long currentUserId,
+            Long courseId,
+            GenerateStudyTasksRequest request
+    ) {
         validateCurrentUser(currentUserId);
         validateCourseId(courseId);
-        ensureCourseAccess(currentUserId, courseId);
 
-        boolean includeAssignment = request == null
-                || request.getIncludeAssignment() == null
-                || Boolean.TRUE.equals(request.getIncludeAssignment());
+        ensureCourseAccess(
+                currentUserId,
+                courseId
+        );
 
-        boolean includeRubric = request == null
-                || request.getIncludeRubric() == null
-                || Boolean.TRUE.equals(request.getIncludeRubric());
+        boolean includeAssignment =
+                request == null
+                        || request.getIncludeAssignment() == null
+                        || Boolean.TRUE.equals(
+                        request.getIncludeAssignment()
+                );
 
-        boolean skipExisting = request == null
-                || request.getSkipExisting() == null
-                || Boolean.TRUE.equals(request.getSkipExisting());
+        boolean includeRubric =
+                request == null
+                        || request.getIncludeRubric() == null
+                        || Boolean.TRUE.equals(
+                        request.getIncludeRubric()
+                );
 
-        int maxTasks = normalizeMaxTasks(request == null ? null : request.getMaxTasks());
+        boolean skipExisting =
+                request == null
+                        || request.getSkipExisting() == null
+                        || Boolean.TRUE.equals(
+                        request.getSkipExisting()
+                );
 
-        LocalDateTime fallbackDueDate = request == null ? null : request.getDueDate();
+        int maxTasks =
+                normalizeMaxTasks(
+                        request == null
+                                ? null
+                                : request.getMaxTasks()
+                );
 
-        List<TaskCandidate> candidates = new ArrayList<>();
+        LocalDateTime fallbackDueDate =
+                request == null
+                        ? null
+                        : request.getDueDate();
+
+        List<TaskCandidate> candidates =
+                new ArrayList<>();
 
         if (includeAssignment) {
             AssignmentAnalysis assignmentAnalysis =
-                    assignmentAnalysisMapper.findLatestByCourseIdAndUserId(
-                            currentUserId,
-                            courseId
-                    );
+                    assignmentAnalysisMapper
+                            .findLatestByCourseIdAndUserId(
+                                    currentUserId,
+                                    courseId
+                            );
 
             if (assignmentAnalysis != null) {
-                candidates.addAll(buildAssignmentTaskCandidates(assignmentAnalysis, fallbackDueDate));
+                candidates.addAll(
+                        buildAssignmentTaskCandidates(
+                                assignmentAnalysis,
+                                fallbackDueDate
+                        )
+                );
             }
         }
 
         if (includeRubric) {
             RubricAnalysis rubricAnalysis =
-                    rubricAnalysisMapper.findLatestByCourseIdAndUserId(
-                            currentUserId,
-                            courseId
-                    );
+                    rubricAnalysisMapper
+                            .findLatestByCourseIdAndUserId(
+                                    currentUserId,
+                                    courseId
+                            );
 
             if (rubricAnalysis != null) {
-                candidates.addAll(buildRubricTaskCandidates(rubricAnalysis, fallbackDueDate));
+                candidates.addAll(
+                        buildRubricTaskCandidates(
+                                rubricAnalysis,
+                                fallbackDueDate
+                        )
+                );
             }
         }
 
-        candidates = deduplicateAndLimit(candidates, maxTasks);
+        candidates =
+                deduplicateAndLimit(
+                        candidates,
+                        maxTasks
+                );
 
         if (candidates.isEmpty()) {
             throw new BusinessException(
@@ -174,35 +213,70 @@ public class StudyTaskService {
             );
         }
 
-        List<StudyTaskResponse> createdTasks = new ArrayList<>();
-        LocalDateTime now = LocalDateTime.now();
+        Set<String> existingTitleKeys =
+                new LinkedHashSet<>();
+
+        if (skipExisting) {
+            List<StudyTask> existingTasks =
+                    studyTaskMapper.findByUserIdAndCourseId(
+                            currentUserId,
+                            courseId
+                    );
+
+            for (StudyTask existingTask : existingTasks) {
+                if (existingTask == null
+                        || existingTask.getTitle() == null) {
+                    continue;
+                }
+
+                existingTitleKeys.add(
+                        normalizeTitleKey(
+                                existingTask.getTitle()
+                        )
+                );
+            }
+        }
+
+        List<StudyTaskResponse> createdTasks =
+                new ArrayList<>();
+
+        LocalDateTime now =
+                LocalDateTime.now();
 
         for (TaskCandidate candidate : candidates) {
-            if (candidate.title() == null || candidate.title().isBlank()) {
+            if (candidate.title() == null
+                    || candidate.title().isBlank()) {
                 continue;
             }
 
-            String normalizedTitle = candidate.title().trim();
+            String normalizedTitle =
+                    candidate.title().trim();
 
-            if (skipExisting) {
-                int existingCount = studyTaskMapper.countByTitle(
-                        currentUserId,
-                        courseId,
-                        normalizedTitle
-                );
+            String titleKey =
+                    normalizeTitleKey(
+                            normalizedTitle
+                    );
 
-                if (existingCount > 0) {
-                    continue;
-                }
+            if (skipExisting
+                    && existingTitleKeys.contains(titleKey)) {
+                continue;
             }
 
-            StudyTask task = new StudyTask();
+            StudyTask task =
+                    new StudyTask();
+
             task.setUserId(currentUserId);
             task.setCourseId(courseId);
             task.setDocumentId(candidate.documentId());
             task.setTitle(normalizedTitle);
-            task.setDescription(normalizeBlankToNull(candidate.description()));
-            task.setStatus(StudyTaskStatus.TODO.name());
+            task.setDescription(
+                    normalizeBlankToNull(
+                            candidate.description()
+                    )
+            );
+            task.setStatus(
+                    StudyTaskStatus.TODO.name()
+            );
             task.setDueDate(candidate.dueDate());
             task.setSourceType(candidate.sourceType());
             task.setCreatedAt(now);
@@ -210,44 +284,72 @@ public class StudyTaskService {
 
             studyTaskMapper.insert(task);
 
-            createdTasks.add(toResponse(task));
+            if (task.getId() == null) {
+                throw new BusinessException(
+                        "TASK_CREATE_FAILED",
+                        "Failed to create generated study task."
+                );
+            }
+
+            createdTasks.add(
+                    toResponse(task)
+            );
+
+            existingTitleKeys.add(titleKey);
         }
 
-        studyTaskMapper.insertLearningHistory(
-                currentUserId,
-                courseId,
-                "REVIEW",
-                "COURSE",
-                courseId,
-                null,
-                now
-        );
+        if (!createdTasks.isEmpty()) {
+            learningHistoryMapper.insertLearningHistory(
+                    currentUserId,
+                    courseId,
+                    LearningEventTypes.CHECKLIST,
+                    LearningTargetTypes.COURSE,
+                    courseId,
+                    "Generated study checklist"
+            );
+        }
+
+        String message =
+                createdTasks.isEmpty()
+                        ? "No new study tasks were created because matching tasks already exist."
+                        : "Study checklist generated successfully.";
 
         return new GenerateStudyTasksResponse(
                 courseId,
                 createdTasks.size(),
-                "Study checklist generated successfully.",
+                message,
                 createdTasks
         );
     }
 
-    public List<StudyTaskResponse> getCourseTasks(Long currentUserId,
-                                                  Long courseId) {
+    public List<StudyTaskResponse> getCourseTasks(
+            Long currentUserId,
+            Long courseId
+    ) {
         validateCurrentUser(currentUserId);
         validateCourseId(courseId);
 
-        ensureCourseAccess(currentUserId, courseId);
+        ensureCourseAccess(
+                currentUserId,
+                courseId
+        );
 
         return studyTaskMapper
-                .findByCourseIdAndUserId(currentUserId, courseId)
+                .findByUserIdAndCourseId(
+                        currentUserId,
+                        courseId
+                )
                 .stream()
                 .map(this::toResponse)
                 .toList();
     }
 
-    public StudyTaskResponse updateTask(Long currentUserId,
-                                        Long taskId,
-                                        UpdateStudyTaskRequest request) {
+    @Transactional
+    public StudyTaskResponse updateTask(
+            Long currentUserId,
+            Long taskId,
+            UpdateStudyTaskRequest request
+    ) {
         validateCurrentUser(currentUserId);
         validateTaskId(taskId);
 
@@ -258,10 +360,11 @@ public class StudyTaskService {
             );
         }
 
-        StudyTask existingTask = studyTaskMapper.findByIdAndUserId(
-                taskId,
-                currentUserId
-        );
+        StudyTask existingTask =
+                studyTaskMapper.findByIdAndUserId(
+                        taskId,
+                        currentUserId
+                );
 
         if (existingTask == null) {
             throw new BusinessException(
@@ -278,20 +381,33 @@ public class StudyTaskService {
                 );
             }
 
-            existingTask.setTitle(request.getTitle().trim());
+            existingTask.setTitle(
+                    request.getTitle().trim()
+            );
         }
 
         if (request.getDescription() != null) {
-            existingTask.setDescription(normalizeBlankToNull(request.getDescription()));
+            existingTask.setDescription(
+                    normalizeBlankToNull(
+                            request.getDescription()
+                    )
+            );
         }
 
         if (request.getDueDate() != null) {
-            existingTask.setDueDate(request.getDueDate());
+            existingTask.setDueDate(
+                    request.getDueDate()
+            );
         }
 
-        existingTask.setUpdatedAt(LocalDateTime.now());
+        existingTask.setUpdatedAt(
+                LocalDateTime.now()
+        );
 
-        int updated = studyTaskMapper.update(existingTask);
+        int updated =
+                studyTaskMapper.updateByIdAndUserId(
+                        existingTask
+                );
 
         if (updated == 0) {
             throw new BusinessException(
@@ -303,15 +419,19 @@ public class StudyTaskService {
         return toResponse(existingTask);
     }
 
-    public StudyTaskResponse completeTask(Long currentUserId,
-                                          Long taskId) {
+    @Transactional
+    public StudyTaskResponse completeTask(
+            Long currentUserId,
+            Long taskId
+    ) {
         validateCurrentUser(currentUserId);
         validateTaskId(taskId);
 
-        StudyTask existingTask = studyTaskMapper.findByIdAndUserId(
-                taskId,
-                currentUserId
-        );
+        StudyTask existingTask =
+                studyTaskMapper.findByIdAndUserId(
+                        taskId,
+                        currentUserId
+                );
 
         if (existingTask == null) {
             throw new BusinessException(
@@ -320,13 +440,21 @@ public class StudyTaskService {
             );
         }
 
-        LocalDateTime now = LocalDateTime.now();
+        if (StudyTaskStatus.DONE.name()
+                .equals(existingTask.getStatus())) {
+            return toResponse(existingTask);
+        }
 
-        int updated = studyTaskMapper.markDone(
-                taskId,
-                currentUserId,
-                now
-        );
+        LocalDateTime now =
+                LocalDateTime.now();
+
+        int updated =
+                studyTaskMapper.updateStatusByIdAndUserId(
+                        taskId,
+                        currentUserId,
+                        StudyTaskStatus.DONE.name(),
+                        now
+                );
 
         if (updated == 0) {
             throw new BusinessException(
@@ -335,21 +463,35 @@ public class StudyTaskService {
             );
         }
 
-        existingTask.setStatus(StudyTaskStatus.DONE.name());
+        existingTask.setStatus(
+                StudyTaskStatus.DONE.name()
+        );
         existingTask.setUpdatedAt(now);
+
+        learningHistoryMapper.insertLearningHistory(
+                currentUserId,
+                existingTask.getCourseId(),
+                LearningEventTypes.TASK_COMPLETED,
+                LearningTargetTypes.STUDY_TASK,
+                existingTask.getId(),
+                existingTask.getTitle()
+        );
 
         return toResponse(existingTask);
     }
 
-    public void deleteTask(Long currentUserId,
-                           Long taskId) {
+    public void deleteTask(
+            Long currentUserId,
+            Long taskId
+    ) {
         validateCurrentUser(currentUserId);
         validateTaskId(taskId);
 
-        int deleted = studyTaskMapper.deleteByIdAndUserId(
-                taskId,
-                currentUserId
-        );
+        int deleted =
+                studyTaskMapper.deleteByIdAndUserId(
+                        taskId,
+                        currentUserId
+                );
 
         if (deleted == 0) {
             throw new BusinessException(
@@ -359,7 +501,9 @@ public class StudyTaskService {
         }
     }
 
-    private void validateCurrentUser(Long currentUserId) {
+    private void validateCurrentUser(
+            Long currentUserId
+    ) {
         if (currentUserId == null) {
             throw new BusinessException(
                     "UNAUTHORIZED",
@@ -368,7 +512,9 @@ public class StudyTaskService {
         }
     }
 
-    private void validateCourseId(Long courseId) {
+    private void validateCourseId(
+            Long courseId
+    ) {
         if (courseId == null) {
             throw new BusinessException(
                     "INVALID_COURSE_ID",
@@ -377,7 +523,9 @@ public class StudyTaskService {
         }
     }
 
-    private void validateTaskId(Long taskId) {
+    private void validateTaskId(
+            Long taskId
+    ) {
         if (taskId == null) {
             throw new BusinessException(
                     "INVALID_TASK_ID",
@@ -386,7 +534,9 @@ public class StudyTaskService {
         }
     }
 
-    private void validateCreateRequest(CreateStudyTaskRequest request) {
+    private void validateCreateRequest(
+            CreateStudyTaskRequest request
+    ) {
         if (request == null) {
             throw new BusinessException(
                     "INVALID_TASK_REQUEST",
@@ -394,7 +544,8 @@ public class StudyTaskService {
             );
         }
 
-        if (request.getTitle() == null || request.getTitle().isBlank()) {
+        if (request.getTitle() == null
+                || request.getTitle().isBlank()) {
             throw new BusinessException(
                     "INVALID_TASK_TITLE",
                     "Task title is required."
@@ -402,8 +553,15 @@ public class StudyTaskService {
         }
     }
 
-    private void ensureCourseAccess(Long userId, Long courseId) {
-        int count = studyTaskMapper.countCourseOwnership(userId, courseId);
+    private void ensureCourseAccess(
+            Long userId,
+            Long courseId
+    ) {
+        int count =
+                studyTaskMapper.countCourseOwnership(
+                        userId,
+                        courseId
+                );
 
         if (count == 0) {
             throw new BusinessException(
@@ -413,14 +571,17 @@ public class StudyTaskService {
         }
     }
 
-    private void ensureDocumentAccess(Long userId,
-                                      Long courseId,
-                                      Long documentId) {
-        int count = studyTaskMapper.countDocumentOwnership(
-                userId,
-                courseId,
-                documentId
-        );
+    private void ensureDocumentAccess(
+            Long userId,
+            Long courseId,
+            Long documentId
+    ) {
+        int count =
+                studyTaskMapper.countDocumentOwnership(
+                        userId,
+                        courseId,
+                        documentId
+                );
 
         if (count == 0) {
             throw new BusinessException(
@@ -430,7 +591,9 @@ public class StudyTaskService {
         }
     }
 
-    private String normalizeBlankToNull(String value) {
+    private String normalizeBlankToNull(
+            String value
+    ) {
         if (value == null || value.isBlank()) {
             return null;
         }
@@ -438,7 +601,22 @@ public class StudyTaskService {
         return value.trim();
     }
 
-    private StudyTaskResponse toResponse(StudyTask task) {
+    private String normalizeTitleKey(
+            String title
+    ) {
+        if (title == null) {
+            return "";
+        }
+
+        return title
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toLowerCase();
+    }
+
+    private StudyTaskResponse toResponse(
+            StudyTask task
+    ) {
         return new StudyTaskResponse(
                 task.getId(),
                 task.getCourseId(),
@@ -453,132 +631,194 @@ public class StudyTaskService {
         );
     }
 
-    private List<TaskCandidate> buildAssignmentTaskCandidates(AssignmentAnalysis analysis,
-                                                              LocalDateTime fallbackDueDate) {
-        List<TaskCandidate> candidates = new ArrayList<>();
+    private List<TaskCandidate> buildAssignmentTaskCandidates(
+            AssignmentAnalysis analysis,
+            LocalDateTime fallbackDueDate
+    ) {
+        List<TaskCandidate> candidates =
+                new ArrayList<>();
 
-        LocalDateTime dueDate = analysis.getDeadline() != null
-                ? analysis.getDeadline()
-                : fallbackDueDate;
+        LocalDateTime dueDate =
+                analysis.getDeadline() != null
+                        ? analysis.getDeadline()
+                        : fallbackDueDate;
 
-        List<String> checklist = fromStringListJson(analysis.getChecklistJson());
-        List<String> deliverables = fromStringListJson(analysis.getDeliverablesJson());
-        List<String> requirements = fromStringListJson(analysis.getRequirementsJson());
+        List<String> checklist =
+                fromStringListJson(
+                        analysis.getChecklistJson()
+                );
+
+        List<String> deliverables =
+                fromStringListJson(
+                        analysis.getDeliverablesJson()
+                );
+
+        List<String> requirements =
+                fromStringListJson(
+                        analysis.getRequirementsJson()
+                );
 
         for (String item : checklist) {
             if (item == null || item.isBlank()) {
                 continue;
             }
 
-            candidates.add(new TaskCandidate(
-                    analysis.getDocumentId(),
-                    item.trim(),
-                    "Generated from assignment checklist.",
-                    dueDate,
-                    StudyTaskSourceType.ASSIGNMENT.name()
-            ));
+            candidates.add(
+                    new TaskCandidate(
+                            analysis.getDocumentId(),
+                            item.trim(),
+                            "Generated from assignment checklist.",
+                            dueDate,
+                            StudyTaskSourceType.ASSIGNMENT.name()
+                    )
+            );
         }
 
         for (String deliverable : deliverables) {
-            if (deliverable == null || deliverable.isBlank()) {
+            if (deliverable == null
+                    || deliverable.isBlank()) {
                 continue;
             }
 
-            candidates.add(new TaskCandidate(
-                    analysis.getDocumentId(),
-                    "Prepare deliverable: " + deliverable.trim(),
-                    "Make sure this assignment deliverable is completed and ready for submission.",
-                    dueDate,
-                    StudyTaskSourceType.ASSIGNMENT.name()
-            ));
+            candidates.add(
+                    new TaskCandidate(
+                            analysis.getDocumentId(),
+                            "Prepare deliverable: "
+                                    + deliverable.trim(),
+                            "Make sure this assignment deliverable is completed and ready for submission.",
+                            dueDate,
+                            StudyTaskSourceType.ASSIGNMENT.name()
+                    )
+            );
         }
 
         for (String requirement : requirements) {
-            if (requirement == null || requirement.isBlank()) {
+            if (requirement == null
+                    || requirement.isBlank()) {
                 continue;
             }
 
-            candidates.add(new TaskCandidate(
-                    analysis.getDocumentId(),
-                    "Check requirement: " + requirement.trim(),
-                    "Verify that this requirement is clearly addressed in your work.",
-                    dueDate,
-                    StudyTaskSourceType.ASSIGNMENT.name()
-            ));
+            candidates.add(
+                    new TaskCandidate(
+                            analysis.getDocumentId(),
+                            "Check requirement: "
+                                    + requirement.trim(),
+                            "Verify that this requirement is clearly addressed in your work.",
+                            dueDate,
+                            StudyTaskSourceType.ASSIGNMENT.name()
+                    )
+            );
         }
 
         return candidates;
     }
 
-    private List<TaskCandidate> buildRubricTaskCandidates(RubricAnalysis analysis,
-                                                          LocalDateTime fallbackDueDate) {
-        List<TaskCandidate> candidates = new ArrayList<>();
+    private List<TaskCandidate> buildRubricTaskCandidates(
+            RubricAnalysis analysis,
+            LocalDateTime fallbackDueDate
+    ) {
+        List<TaskCandidate> candidates =
+                new ArrayList<>();
 
-        List<RubricCriterionResult> criteria = fromCriteriaJson(analysis.getCriteriaJson());
-        List<String> excellentBand = fromStringListJson(analysis.getExcellentBandJson());
+        List<RubricCriterionResult> criteria =
+                fromCriteriaJson(
+                        analysis.getCriteriaJson()
+                );
+
+        List<String> excellentBand =
+                fromStringListJson(
+                        analysis.getExcellentBandJson()
+                );
 
         for (RubricCriterionResult criterion : criteria) {
-            if (criterion == null || criterion.getName() == null || criterion.getName().isBlank()) {
+            if (criterion == null
+                    || criterion.getName() == null
+                    || criterion.getName().isBlank()) {
                 continue;
             }
 
-            String weight = criterion.getWeight() == null || criterion.getWeight().isBlank()
-                    ? "Not specified"
-                    : criterion.getWeight();
+            String weight =
+                    criterion.getWeight() == null
+                            || criterion.getWeight().isBlank()
+                            ? "Not specified"
+                            : criterion.getWeight();
 
-            String description = criterion.getDescription() == null
-                    ? ""
-                    : criterion.getDescription();
+            String description =
+                    criterion.getDescription() == null
+                            ? ""
+                            : criterion.getDescription();
 
-            candidates.add(new TaskCandidate(
-                    analysis.getDocumentId(),
-                    "Address rubric criterion: " + criterion.getName().trim(),
-                    "Weight: " + weight + ". " + description,
-                    fallbackDueDate,
-                    StudyTaskSourceType.RUBRIC.name()
-            ));
+            candidates.add(
+                    new TaskCandidate(
+                            analysis.getDocumentId(),
+                            "Address rubric criterion: "
+                                    + criterion.getName().trim(),
+                            "Weight: " + weight + ". " + description,
+                            fallbackDueDate,
+                            StudyTaskSourceType.RUBRIC.name()
+                    )
+            );
         }
 
         for (String excellentItem : excellentBand) {
-            if (excellentItem == null || excellentItem.isBlank()) {
+            if (excellentItem == null
+                    || excellentItem.isBlank()) {
                 continue;
             }
 
-            candidates.add(new TaskCandidate(
-                    analysis.getDocumentId(),
-                    "Target excellent band: " + shortenTitle(excellentItem.trim()),
-                    excellentItem.trim(),
-                    fallbackDueDate,
-                    StudyTaskSourceType.RUBRIC.name()
-            ));
+            candidates.add(
+                    new TaskCandidate(
+                            analysis.getDocumentId(),
+                            "Target excellent band: "
+                                    + shortenTitle(
+                                    excellentItem.trim()
+                            ),
+                            excellentItem.trim(),
+                            fallbackDueDate,
+                            StudyTaskSourceType.RUBRIC.name()
+                    )
+            );
         }
 
-        if (analysis.getHighScoreStrategy() != null && !analysis.getHighScoreStrategy().isBlank()) {
-            candidates.add(new TaskCandidate(
-                    analysis.getDocumentId(),
-                    "Apply high score strategy from rubric",
-                    analysis.getHighScoreStrategy(),
-                    fallbackDueDate,
-                    StudyTaskSourceType.RUBRIC.name()
-            ));
+        if (analysis.getHighScoreStrategy() != null
+                && !analysis.getHighScoreStrategy().isBlank()) {
+            candidates.add(
+                    new TaskCandidate(
+                            analysis.getDocumentId(),
+                            "Apply high score strategy from rubric",
+                            analysis.getHighScoreStrategy(),
+                            fallbackDueDate,
+                            StudyTaskSourceType.RUBRIC.name()
+                    )
+            );
         }
 
         return candidates;
     }
 
-    private List<TaskCandidate> deduplicateAndLimit(List<TaskCandidate> candidates,
-                                                    int maxTasks) {
-        List<TaskCandidate> result = new ArrayList<>();
-        Set<String> seenTitles = new LinkedHashSet<>();
+    private List<TaskCandidate> deduplicateAndLimit(
+            List<TaskCandidate> candidates,
+            int maxTasks
+    ) {
+        List<TaskCandidate> result =
+                new ArrayList<>();
+
+        Set<String> seenTitleKeys =
+                new LinkedHashSet<>();
 
         for (TaskCandidate candidate : candidates) {
-            if (candidate == null || candidate.title() == null || candidate.title().isBlank()) {
+            if (candidate == null
+                    || candidate.title() == null
+                    || candidate.title().isBlank()) {
                 continue;
             }
 
-            String normalizedTitle = candidate.title().trim();
+            String titleKey =
+                    normalizeTitleKey(
+                            candidate.title()
+                    );
 
-            if (!seenTitles.add(normalizedTitle)) {
+            if (!seenTitleKeys.add(titleKey)) {
                 continue;
             }
 
@@ -592,15 +832,22 @@ public class StudyTaskService {
         return result;
     }
 
-    private int normalizeMaxTasks(Integer maxTasks) {
+    private int normalizeMaxTasks(
+            Integer maxTasks
+    ) {
         if (maxTasks == null || maxTasks <= 0) {
             return 20;
         }
 
-        return Math.min(maxTasks, 50);
+        return Math.min(
+                maxTasks,
+                50
+        );
     }
 
-    private String shortenTitle(String text) {
+    private String shortenTitle(
+            String text
+    ) {
         if (text == null) {
             return "";
         }
@@ -609,10 +856,15 @@ public class StudyTaskService {
             return text;
         }
 
-        return text.substring(0, 80) + "...";
+        return text.substring(
+                0,
+                80
+        ) + "...";
     }
 
-    private List<String> fromStringListJson(String json) {
+    private List<String> fromStringListJson(
+            String json
+    ) {
         if (json == null || json.isBlank()) {
             return List.of();
         }
@@ -624,12 +876,14 @@ public class StudyTaskService {
                     }
             );
 
-        } catch (JsonProcessingException e) {
+        } catch (JsonProcessingException exception) {
             return List.of();
         }
     }
 
-    private List<RubricCriterionResult> fromCriteriaJson(String json) {
+    private List<RubricCriterionResult> fromCriteriaJson(
+            String json
+    ) {
         if (json == null || json.isBlank()) {
             return List.of();
         }
@@ -641,7 +895,7 @@ public class StudyTaskService {
                     }
             );
 
-        } catch (JsonProcessingException e) {
+        } catch (JsonProcessingException exception) {
             return List.of();
         }
     }

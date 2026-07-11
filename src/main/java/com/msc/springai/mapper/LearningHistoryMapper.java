@@ -4,6 +4,8 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
+
 @Mapper
 public interface LearningHistoryMapper {
 
@@ -14,7 +16,8 @@ public interface LearningHistoryMapper {
                 event_type,
                 target_type,
                 target_id,
-                topic
+                topic,
+                created_at
             )
             VALUES (
                 #{userId},
@@ -22,15 +25,36 @@ public interface LearningHistoryMapper {
                 #{eventType},
                 #{targetType},
                 #{targetId},
-                #{topic}
+                #{topic},
+                #{createdAt}
             )
             """)
-    int insertLearningHistory(
+    void insertLearningHistory(
             @Param("userId") Long userId,
             @Param("courseId") Long courseId,
             @Param("eventType") String eventType,
             @Param("targetType") String targetType,
             @Param("targetId") Long targetId,
-            @Param("topic") String topic
+            @Param("topic") String topic,
+            @Param("createdAt") LocalDateTime createdAt
     );
+
+    default void insertLearningHistory(
+            Long userId,
+            Long courseId,
+            String eventType,
+            String targetType,
+            Long targetId,
+            String topic
+    ) {
+        insertLearningHistory(
+                userId,
+                courseId,
+                eventType,
+                targetType,
+                targetId,
+                topic,
+                LocalDateTime.now()
+        );
+    }
 }
